@@ -1,3 +1,13 @@
+"""
+GRACE (Graph Contrastive Learning)
+
+References
+----------
+Papers: https://arxiv.org/abs/2006.04131
+Author's code: https://github.com/CRIPAC-DIG/GRACE
+DGL code: https://github.com/dmlc/dgl/tree/master/examples/pytorch/grace
+"""
+
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
