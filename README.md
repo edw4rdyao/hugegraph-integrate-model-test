@@ -1,12 +1,12 @@
 # hugegraph-integrate-model-test
 
-## run
+## Run
 
 ```commandline
 python main.py
 ```
 
-## model test result
+## Model test result
 
 ### DGI
 
