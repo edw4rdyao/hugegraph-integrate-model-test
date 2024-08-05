@@ -1,8 +1,8 @@
-import time
-
 import dgl
 import torch
 import torch.nn.functional as F
+import  copy
+from tqdm import trange
 
 from dataset.dataset_from_dgl import dataset_from_dgl
 from models import Classifier, DGI
@@ -19,53 +19,45 @@ def dgi_test(
         clf_lr=1e-2,
         n_dgi_epochs=300,
         n_clf_epochs=300,
-        patience=30,
-        weight_decay=0.0,
-        verbose=0
+        patience=40,
+        weight_decay=0
 ):
+    if gpu != -1 and torch.cuda.is_available():
+        device = "cuda:{}".format(gpu)
+    else:
+        device = "cpu"
+
     dataset = dataset_from_dgl(dataset_name)
     graph = dataset[0]
-    feats = torch.FloatTensor(graph.ndata["feat"])
-    labels = torch.LongTensor(graph.ndata["label"])
-    train_mask = torch.BoolTensor(graph.ndata["train_mask"])
-    test_mask = torch.BoolTensor(graph.ndata["test_mask"])
+    feats = torch.FloatTensor(graph.ndata["feat"]).to(device)
+    labels = torch.LongTensor(graph.ndata["label"]).to(device)
+    train_mask = torch.BoolTensor(graph.ndata["train_mask"]).to(device)
+    test_mask = torch.BoolTensor(graph.ndata["test_mask"]).to(device)
     n_in_feats = feats.shape[1]
     n_classes = dataset.num_classes
 
     if self_loop:
         graph = dgl.remove_self_loop(graph)
         graph = dgl.add_self_loop(graph)
+    graph = graph.to(device)
 
-    if gpu < 0:
-        cuda = False
-    else:
-        cuda = True
-        torch.cuda.set_device(gpu)
-        feats = feats.cuda()
-        labels = labels.cuda()
-        train_mask = train_mask.cuda()
-        test_mask = test_mask.cuda()
-        graph = graph.to(gpu)
     dgi = DGI(
         n_in_feats=n_in_feats,
         n_hidden=n_hidden,
         n_layers=n_layers,
         p_drop=p_drop
-    )
-    if cuda:
-        dgi.cuda()
+    ).to(device)
+    best_dgi_model = copy.deepcopy(dgi)
+
     dgi_optimizer = torch.optim.Adam(
         dgi.parameters(), lr=dgi_lr, weight_decay=weight_decay
     )
     # train deep graph infomax
     cnt_wait = 0
     best = 1e9
-    best_t = 0
-    mean = 0
-    for epoch in range(n_dgi_epochs):
+    epochs = trange(n_dgi_epochs)
+    for _ in epochs:
         dgi.train()
-        if epoch >= 3:
-            t0 = time.time()
 
         dgi_optimizer.zero_grad()
         loss = dgi(graph, feats)
@@ -74,9 +66,8 @@ def dgi_test(
 
         if loss < best:
             best = loss
-            best_t = epoch
             cnt_wait = 0
-            torch.save(dgi.state_dict(), "tmp_best_dgi.pkl")
+            best_dgi_model = copy.deepcopy(dgi)
         else:
             cnt_wait += 1
 
@@ -84,31 +75,24 @@ def dgi_test(
             print("Early stopping!")
             break
 
-        if epoch >= 3 and verbose > 0:
-            mean = (mean * (epoch - 3) + (time.time() - t0)) / (epoch - 2)
-            print("Epoch {:04d} | Time(s) {:.4f} | Loss {:.4f}".format(epoch, mean, loss.item()))
+        epochs.set_description("Train Loss {:.4f}".format(loss.item()))
 
-    # create classifier model
-    clf = Classifier(n_hidden, n_classes)
-    if cuda:
-        clf.cuda()
+    best_dgi_model.eval()
+    embeds = best_dgi_model.encoder(graph, feats, corrupt=False)
+    embeds = embeds.detach()
+
+    # classifier model
+    clf = Classifier(n_hidden, n_classes).to(device)
 
     classifier_optimizer = torch.optim.Adam(
         clf.parameters(),
         lr=clf_lr,
         weight_decay=weight_decay,
     )
-
     # train classifier
-    print("Loading {}th epoch".format(best_t))
-    dgi.load_state_dict(torch.load("tmp_best_dgi.pkl"))
-    embeds = dgi.encoder(graph, feats, corrupt=False)
-    embeds = embeds.detach()
-    mean = 0
-    for epoch in range(n_clf_epochs):
+    epochs = trange(n_clf_epochs)
+    for _ in epochs:
         clf.train()
-        if epoch >= 3:
-            t0 = time.time()
 
         classifier_optimizer.zero_grad()
         preds = clf(embeds)
@@ -116,9 +100,7 @@ def dgi_test(
         loss.backward()
         classifier_optimizer.step()
 
-        if epoch >= 3 and verbose > 0:
-            mean = (mean * (epoch - 3) + (time.time() - t0)) / (epoch - 2)
-            print("Epoch {:04d} | Time(s) {:.4f} | Loss {:.4f}".format(epoch, mean, loss.item()))
+        epochs.set_description("Train Loss {:.4f}".format(loss.item()))
 
     clf.eval()
     with torch.no_grad():
@@ -127,4 +109,4 @@ def dgi_test(
         correct = (predicted == labels[test_mask]).sum().item()
         acc = correct / test_mask.sum().item()
 
-    print("dgi: dataset {} test accuracy {:.4f}".format(dataset_name, acc))
+    print("DGI: dataset {} test accuracy {:.4f}".format(dataset_name, acc))

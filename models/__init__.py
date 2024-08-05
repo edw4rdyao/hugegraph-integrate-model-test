@@ -1,4 +1,5 @@
-from .grace import Grace
-from .jknet import JKNet
-from .dgi import DGI, Classifier
+from .clf import Classifier
+from .dgi import DGI
+from .grace import GRACE
 from .grand import GRAND
+from .jknet import JKNet
