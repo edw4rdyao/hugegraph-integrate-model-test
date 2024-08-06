@@ -91,6 +91,7 @@ def grace_test(
     embeds = model.get_embedding(graph, feats)
     acc = classification(embeds, labels)
     print("GRACE: dataset {} test accuracy {:.4f}".format(dataset_name, acc))
+    torch.cuda.empty_cache()
 
 
 # Data augmentation on graphs via edge dropping and feature masking

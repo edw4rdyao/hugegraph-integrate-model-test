@@ -1,7 +1,8 @@
+import copy
+
 import dgl
 import torch
 import torch.nn.functional as F
-import  copy
 from tqdm import trange
 
 from dataset.dataset_from_dgl import dataset_from_dgl
@@ -54,7 +55,7 @@ def dgi_test(
     )
     # train deep graph infomax
     cnt_wait = 0
-    best = 1e9
+    best_loss = 1e9
     epochs = trange(n_dgi_epochs)
     for _ in epochs:
         dgi.train()
@@ -64,8 +65,8 @@ def dgi_test(
         loss.backward()
         dgi_optimizer.step()
 
-        if loss < best:
-            best = loss
+        if loss < best_loss:
+            best_loss = loss
             cnt_wait = 0
             best_dgi_model = copy.deepcopy(dgi)
         else:
@@ -110,3 +111,4 @@ def dgi_test(
         acc = correct / test_mask.sum().item()
 
     print("DGI: dataset {} test accuracy {:.4f}".format(dataset_name, acc))
+    torch.cuda.empty_cache()

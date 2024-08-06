@@ -85,3 +85,4 @@ def jknet_test(
     test_acc = accuracy_score(labels[test_idx].cpu(), test_preds.cpu())
 
     print("JKNet: dataset {} test accuracy {:.4f}".format(dataset_name, test_acc))
+    torch.cuda.empty_cache()
