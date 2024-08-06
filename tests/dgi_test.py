@@ -20,7 +20,7 @@ def dgi_test(
         clf_lr=1e-2,
         n_dgi_epochs=300,
         n_clf_epochs=300,
-        patience=40,
+        early_stopping=40,
         weight_decay=0
 ):
     if gpu != -1 and torch.cuda.is_available():
@@ -38,7 +38,6 @@ def dgi_test(
     n_classes = dataset.num_classes
 
     if self_loop:
-        graph = dgl.remove_self_loop(graph)
         graph = dgl.add_self_loop(graph)
     graph = graph.to(device)
 
@@ -50,7 +49,7 @@ def dgi_test(
     ).to(device)
     best_dgi_model = copy.deepcopy(dgi)
 
-    dgi_optimizer = torch.optim.Adam(
+    dgi_opt = torch.optim.Adam(
         dgi.parameters(), lr=dgi_lr, weight_decay=weight_decay
     )
     # train deep graph infomax
@@ -60,10 +59,10 @@ def dgi_test(
     for _ in epochs:
         dgi.train()
 
-        dgi_optimizer.zero_grad()
+        dgi_opt.zero_grad()
         loss = dgi(graph, feats)
         loss.backward()
-        dgi_optimizer.step()
+        dgi_opt.step()
 
         if loss < best_loss:
             best_loss = loss
@@ -72,7 +71,7 @@ def dgi_test(
         else:
             cnt_wait += 1
 
-        if cnt_wait == patience:
+        if cnt_wait == early_stopping:
             print("Early stopping!")
             break
 

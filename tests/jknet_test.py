@@ -16,7 +16,7 @@ def jknet_test(
         n_hidden=32,
         n_layers=2,
         dropout=0.5,
-        epochs=200,
+        n_epochs=200,
         mode="cat",
         lr=0.005,
         lamb=0.0005,
@@ -50,7 +50,7 @@ def jknet_test(
     loss_fn = nn.CrossEntropyLoss()
     opt = optim.Adam(model.parameters(), lr=lr, weight_decay=lamb)
     acc = 0
-    epochs = trange(epochs)
+    epochs = trange(n_epochs)
     for _ in epochs:
         model.train()
         logits = model(graph, feats)

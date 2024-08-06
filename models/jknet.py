@@ -3,7 +3,7 @@ Jumping Knowledge Network (JKNet)
 
 References
 ----------
-Papers: https://arxiv.org/abs/1806.03536
+Paper: https://arxiv.org/abs/1806.03536
 DGL code: https://github.com/dmlc/dgl/tree/master/examples/pytorch/jknet
 """
 

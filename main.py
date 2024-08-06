@@ -1,5 +1,6 @@
 from tests.dgi_test import dgi_test
 from tests.grace_test import grace_test
+from tests.grand_test import grand_test
 from tests.jknet_test import jknet_test
 
 # dgi test
@@ -19,3 +20,13 @@ jknet_test(dataset_name="cora", n_layers=6, mode="lstm")
 jknet_test(dataset_name="citeseer", n_layers=6, mode="max")
 jknet_test(dataset_name="citeseer", n_layers=6, mode="cat")
 jknet_test(dataset_name="citeseer", n_layers=6, mode="lstm")
+
+# grand test
+grand_test(dataset_name="cora", order=8, sample=4, lam=1.0, temp=0.5, p_drop_input=0.5, p_drop_hidden=0.5,
+           lr=1e-2, early_stopping=100)
+
+grand_test(dataset_name="citeseer", order=2, sample=2, lam=0.7, temp=0.3, p_drop_input=0.0, p_drop_hidden=0.2,
+           lr=1e-2, early_stopping=100)
+
+grand_test(dataset_name="pubmed", order=5, sample=4, lam=1.0, temp=0.2, p_drop_input=0.6, p_drop_hidden=0.8,
+           lr=0.2, bn=True)

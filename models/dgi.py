@@ -3,7 +3,7 @@ Deep Graph Infomax(DGI)
 
 References
 ----------
-Papers: https://arxiv.org/abs/1809.10341
+Paper: https://arxiv.org/abs/1809.10341
 Author's code: https://github.com/PetarV-/DGI
 DGL code: https://github.com/dmlc/dgl/tree/master/examples/pytorch/dgi
 """

@@ -1,7 +1,11 @@
+import copy
+
 import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
+from sklearn.metrics import accuracy_score
+from tqdm import trange
 
 from dataset.dataset_from_dgl import dataset_from_dgl
 from models.grand import GRAND
@@ -16,7 +20,7 @@ def grand_test(
         lr,
         temp,
         lam,
-        early_stopping,
+        early_stopping=200,
         n_epochs=2000,
         bn=False,
         wd=5e-4,
@@ -51,81 +55,60 @@ def grand_test(
         p_drop_input,
         p_drop_hidden,
         bn,
-    )
-    model = model.to(device)
-    graph = graph.to(device)
+    ).to(device)
+    best_model = copy.deepcopy(model)
     opt = optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
-    loss_best = np.inf
-    acc_best = 0
 
-    for epoch in range(n_epochs):
+    cnt_wait = 0
+    best_loss = np.inf
+    best_acc = 0
+
+    epochs = trange(n_epochs)
+    for _ in epochs:
         model.train()
-
-        loss_sup = 0
         logits = model(graph, feats)
-
         # calculate supervised loss
+        loss_sup = 0
         for k in range(sample):
             loss_sup += F.nll_loss(logits[k][train_idx], labels[train_idx])
         loss_sup = loss_sup / sample
-
         # calculate consistency loss
         loss_consis = model.consis_loss(logits, temp, lam)
-
-        loss_train = loss_sup + loss_consis
-        acc_train = torch.sum(
-            logits[0][train_idx].argmax(dim=1) == labels[train_idx]
-        ).item() / len(train_idx)
+        train_loss = loss_sup + loss_consis
 
         # backward
         opt.zero_grad()
-        loss_train.backward()
+        train_loss.backward()
         opt.step()
 
         model.eval()
         with torch.no_grad():
             val_logits = model.inference(graph, feats)
+            val_loss = F.nll_loss(val_logits[val_idx], labels[val_idx])
+            val_preds = val_logits[val_idx].argmax(dim=1)
+            val_acc = accuracy_score(labels[val_idx].cpu(), val_preds.cpu())
 
-            loss_val = F.nll_loss(val_logits[val_idx], labels[val_idx])
-            acc_val = torch.sum(
-                val_logits[val_idx].argmax(dim=1) == labels[val_idx]
-            ).item() / len(val_idx)
-
-            # Print out performance
-            print(
-                "In epoch {}, Train Acc: {:.4f} | Train Loss: {:.4f} ,Val Acc: {:.4f} | Val Loss: {:.4f}".format(
-                    epoch,
-                    acc_train,
-                    loss_train.item(),
-                    acc_val,
-                    loss_val.item(),
+            epochs.set_description(
+                "Train Loss {:.4f} | Val Acc {:.4f} | Val Loss {:.4f}".format(
+                    train_loss.item(), val_acc, val_loss.item(),
                 )
             )
 
             # set early stopping counter
-            if loss_val < loss_best or acc_val > acc_best:
-                if loss_val < loss_best:
-                    best_epoch = epoch
-                    torch.save(model.state_dict(), dataset_name + ".pkl")
-                no_improvement = 0
-                loss_best = min(loss_val, loss_best)
-                acc_best = max(acc_val, acc_best)
+            if val_loss < best_loss:
+                cnt_wait = 0
+                best_loss = val_loss
+                best_model = copy.deepcopy(model)
             else:
-                no_improvement += 1
-                if no_improvement == early_stopping:
+                cnt_wait += 1
+                if cnt_wait == early_stopping:
                     print("Early stopping.")
                     break
 
-    print("Optimization Finished!")
+    best_model.eval()
+    test_logits = best_model.inference(graph, feats)
+    test_preds = torch.argmax(test_logits[test_idx], dim=1)
+    test_acc = accuracy_score(labels[test_idx].cpu(), test_preds.cpu())
 
-    print("Loading {}th epoch".format(best_epoch))
-    model.load_state_dict(torch.load(dataset_name + ".pkl"))
-
-    model.eval()
-
-    test_logits = model.inference(graph, feats)
-    test_acc = torch.sum(
-        test_logits[test_idx].argmax(dim=1) == labels[test_idx]
-    ).item() / len(test_idx)
-
-    print("Test Acc: {:.4f}".format(test_acc))
+    print("GRAND: dataset {} test accuracy {:.4f}".format(dataset_name, test_acc))
+    torch.cuda.empty_cache()
