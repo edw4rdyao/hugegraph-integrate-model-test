@@ -7,7 +7,7 @@ from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 from tqdm import trange
 
-from dataset.dataset_from_dgl import dataset_from_dgl
+from dataset.dataset_from_dgl import dataset_from_dgl_built
 from models.jknet import JKNet
 
 
@@ -26,7 +26,7 @@ def jknet_test(
         device = "cuda:{}".format(gpu)
     else:
         device = "cpu"
-    dataset = dataset_from_dgl(dataset_name=dataset_name)
+    dataset = dataset_from_dgl_built(dataset_name=dataset_name)
     graph = dataset[0].to(device)
     n_classes = dataset.num_classes
     labels = graph.ndata.pop("label").to(device).long()
@@ -47,9 +47,9 @@ def jknet_test(
     ).to(device)
 
     best_model = copy.deepcopy(model)
+    best_acc = 0
     loss_fn = nn.CrossEntropyLoss()
     opt = optim.Adam(model.parameters(), lr=lr, weight_decay=lamb)
-    acc = 0
     epochs = trange(n_epochs)
     for _ in epochs:
         model.train()
@@ -75,8 +75,8 @@ def jknet_test(
             )
         )
 
-        if valid_acc > acc:
-            acc = valid_acc
+        if valid_acc > best_acc:
+            best_acc = valid_acc
             best_model = copy.deepcopy(model)
 
     best_model.eval()

@@ -9,7 +9,7 @@ from sklearn.multiclass import OneVsRestClassifier
 from sklearn.preprocessing import normalize, OneHotEncoder
 from tqdm import trange
 
-from dataset.dataset_from_dgl import dataset_from_dgl
+from dataset.dataset_from_dgl import dataset_from_dgl_built
 from models import GRACE
 
 drop_edge_rates = {
@@ -48,7 +48,7 @@ def grace_test(
     drop_feat_rate_1 = drop_feat_rates[dataset_name][0]
     drop_feat_rate_2 = drop_feat_rates[dataset_name][1]
 
-    dataset = dataset_from_dgl(dataset_name=dataset_name)
+    dataset = dataset_from_dgl_built(dataset_name=dataset_name)
     graph = dataset[0]
     feats = torch.FloatTensor(graph.ndata["feat"]).to(device)
     labels = torch.LongTensor(graph.ndata["label"]).to(device)

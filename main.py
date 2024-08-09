@@ -1,6 +1,7 @@
 from tests.dgi_test import dgi_test
 from tests.grace_test import grace_test
 from tests.grand_test import grand_test
+from tests.han_test import han_test
 from tests.jknet_test import jknet_test
 
 # dgi test
@@ -30,3 +31,7 @@ grand_test(dataset_name="citeseer", order=2, sample=2, lam=0.7, temp=0.3, p_drop
 
 grand_test(dataset_name="pubmed", order=5, sample=4, lam=1.0, temp=0.2, p_drop_input=0.6, p_drop_hidden=0.8,
            lr=0.2, bn=True)
+
+# han test
+han_test(dataset_name="acm", n_hidden=4, p_drop=0.6, n_heads=[8],
+         lr=0.005, wd=0.001, n_epochs=200, seed=42)

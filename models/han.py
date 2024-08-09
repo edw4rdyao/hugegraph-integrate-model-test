@@ -16,85 +16,111 @@ from dgl.nn.pytorch import GATConv
 
 
 class HAN(nn.Module):
-    def __init__(
-        self, num_meta_paths, in_size, hidden_size, out_size, num_heads, dropout
-    ):
+    """
+    Heterogeneous Graph Attention Network (HAN) model.
+
+    Parameters
+    ----------
+    n_meta_paths : int
+        Number of meta-paths.
+    n_in_feats : int
+        Number of input features.
+    n_hidden : int
+        Number of hidden units.
+    n_out_feats : int
+        Number of output features.
+    n_heads : list of int
+        Number of attention heads for each layer.
+    p_drop : float
+        Dropout probability.
+    """
+    def __init__(self, n_meta_paths, n_in_feats, n_hidden, n_out_feats, n_heads, p_drop):
         super(HAN, self).__init__()
 
-        self.layers = nn.ModuleList()
+        self.layers = nn.ModuleList()  # List of HAN layers
+        # First HAN layer
         self.layers.append(
-            HANLayer(
-                num_meta_paths, in_size, hidden_size, num_heads[0], dropout
-            )
+            HANLayer(n_meta_paths, n_in_feats, n_hidden, n_heads[0], p_drop)
         )
-        for l in range(1, len(num_heads)):
+        # Additional HAN layers
+        for h in range(1, len(n_heads)):
             self.layers.append(
-                HANLayer(
-                    num_meta_paths,
-                    hidden_size * num_heads[l - 1],
-                    hidden_size,
-                    num_heads[l],
-                    dropout,
-                )
+                HANLayer(n_meta_paths, n_hidden * n_heads[h - 1], n_hidden, n_heads[h], p_drop)
             )
-        self.predict = nn.Linear(hidden_size * num_heads[-1], out_size)
+        # Fully connected output layer
+        self.fc = nn.Linear(n_hidden * n_heads[-1], n_out_feats)
 
-    def forward(self, g, h):
-        for gnn in self.layers:
-            h = gnn(g, h)
+    def forward(self, graphs, feats):
+        # Pass input through each HAN layer
+        for han_layer in self.layers:
+            feats = han_layer(graphs, feats)
 
-        return self.predict(h)
-
-
-class SemanticAttention(nn.Module):
-    def __init__(self, in_size, hidden_size=128):
-        super(SemanticAttention, self).__init__()
-
-        self.project = nn.Sequential(
-            nn.Linear(in_size, hidden_size),
-            nn.Tanh(),
-            nn.Linear(hidden_size, 1, bias=False),
-        )
-
-    def forward(self, z):
-        w = self.project(z).mean(0)  # (M, 1)
-        beta = torch.softmax(w, dim=0)  # (M, 1)
-        beta = beta.expand((z.shape[0],) + beta.shape)  # (N, M, 1)
-
-        return (beta * z).sum(1)  # (N, D * K)
+        return self.fc(feats)  # Final output through fully connected layer
 
 
 class HANLayer(nn.Module):
-    def __init__(
-        self, num_meta_paths, in_size, out_size, layer_num_heads, dropout
-    ):
+    """
+    HAN layer with GAT and semantic attention.
+
+    Parameters
+    ----------
+    n_meta_paths : int
+        Number of meta-paths.
+    n_in_feats : int
+        Number of input features.
+    n_out_feats : int
+        Number of output features.
+    n_head : int
+        Number of attention heads.
+    p_drop : float
+        Dropout probability.
+    """
+    def __init__(self, n_meta_paths, n_in_feats, n_out_feats, n_head, p_drop):
         super(HANLayer, self).__init__()
-
-        # One GAT layer for each meta path based adjacency matrix
+        # One GAT layer for each meta-path-based adjacency matrix
         self.gat_layers = nn.ModuleList()
-        for i in range(num_meta_paths):
+        for i in range(n_meta_paths):
             self.gat_layers.append(
-                GATConv(
-                    in_size,
-                    out_size,
-                    layer_num_heads,
-                    dropout,
-                    dropout,
-                    activation=F.elu,
-                )
+                GATConv(n_in_feats, n_out_feats, n_head, p_drop, p_drop, activation=F.elu)
             )
-        self.semantic_attention = SemanticAttention(
-            in_size=out_size * layer_num_heads
-        )
-        self.num_meta_paths = num_meta_paths
+        # Semantic attention mechanism
+        self.semantic_attention = SemanticAttention(n_in_feats=n_out_feats * n_head)
+        self.n_meta_paths = n_meta_paths
 
-    def forward(self, gs, h):
+    def forward(self, graphs, feats):
         semantic_embeddings = []
+        # Apply GAT layers to each meta-path graph
+        for i, g in enumerate(graphs):
+            semantic_embeddings.append(self.gat_layers[i](g, feats).flatten(1))  # Flatten the output
+        # Stack the semantic embeddings for attention
+        semantic_embeddings = torch.stack(semantic_embeddings, dim=1)  # (N, M, D * K)
 
-        for i, g in enumerate(gs):
-            semantic_embeddings.append(self.gat_layers[i](g, h).flatten(1))
-        semantic_embeddings = torch.stack(
-            semantic_embeddings, dim=1
-        )  # (N, M, D * K)
+        return self.semantic_attention(semantic_embeddings)  # Apply semantic attention and return (N, D * K)
 
-        return self.semantic_attention(semantic_embeddings)  # (N, D * K)
+
+class SemanticAttention(nn.Module):
+    """
+    Semantic attention mechanism for aggregating meta-path based embeddings.
+
+    Parameters
+    ----------
+    n_in_feats : int
+        Number of input features.
+    n_hidden : int, optional
+        Number of hidden units, by default 128.
+    """
+    def __init__(self, n_in_feats, n_hidden=128):
+        super(SemanticAttention, self).__init__()
+
+        # Two-layer feedforward network for computing attention scores
+        self.project = nn.Sequential(
+            nn.Linear(n_in_feats, n_hidden),  # Linear layer with tanh activation
+            nn.Tanh(),
+            nn.Linear(n_hidden, 1, bias=False),  # Output layer without bias
+        )
+
+    def forward(self, z):
+        w = self.project(z).mean(0)  # Compute attention scores across meta-paths (M, 1)
+        beta = torch.softmax(w, dim=0)  # Normalize attention scores (M, 1)
+        beta = beta.expand((z.shape[0],) + beta.shape)  # Expand scores to match z (N, M, 1)
+        return (beta * z).sum(1)  # Weighted sum of embeddings based on attention scores (N, D * K)

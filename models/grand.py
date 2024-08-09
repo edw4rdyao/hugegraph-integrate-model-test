@@ -41,7 +41,10 @@ class GRAND(nn.Module):
         Whether to use batch normalization.
     """
 
-    def __init__(self, n_in_feats, n_hidden, n_out_feats, sample, order, p_drop_node, p_drop_input, p_drop_hidden, bn):
+    def __init__(
+            self, n_in_feats, n_hidden, n_out_feats,
+            sample, order, p_drop_node, p_drop_input, p_drop_hidden, bn
+    ):
         super(GRAND, self).__init__()
         self.sample = sample
         self.order = order

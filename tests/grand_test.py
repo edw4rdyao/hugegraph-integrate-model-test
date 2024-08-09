@@ -7,7 +7,7 @@ import torch.optim as optim
 from sklearn.metrics import accuracy_score
 from tqdm import trange
 
-from dataset.dataset_from_dgl import dataset_from_dgl
+from dataset.dataset_from_dgl import dataset_from_dgl_built
 from models.grand import GRAND
 
 
@@ -32,7 +32,7 @@ def grand_test(
         device = "cuda:{}".format(gpu)
     else:
         device = "cpu"
-    dataset = dataset_from_dgl(dataset_name=dataset_name)
+    dataset = dataset_from_dgl_built(dataset_name=dataset_name)
     graph = dataset[0].to(device)
     n_classes = dataset.num_classes
     labels = graph.ndata.pop("label").to(device).long()

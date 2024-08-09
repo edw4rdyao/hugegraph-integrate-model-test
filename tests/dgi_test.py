@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import trange
 
-from dataset.dataset_from_dgl import dataset_from_dgl
+from dataset.dataset_from_dgl import dataset_from_dgl_built
 from models import Classifier, DGI
 
 
@@ -28,7 +28,7 @@ def dgi_test(
     else:
         device = "cpu"
 
-    dataset = dataset_from_dgl(dataset_name)
+    dataset = dataset_from_dgl_built(dataset_name)
     graph = dataset[0]
     feats = torch.FloatTensor(graph.ndata["feat"]).to(device)
     labels = torch.LongTensor(graph.ndata["label"]).to(device)
