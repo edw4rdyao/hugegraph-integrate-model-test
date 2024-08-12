@@ -22,10 +22,7 @@ def jknet_test(
         lamb=0.0005,
         gpu=0,
 ):
-    if gpu != -1 and torch.cuda.is_available():
-        device = "cuda:{}".format(gpu)
-    else:
-        device = "cpu"
+    device = "cuda:{}".format(gpu) if gpu != -1 and torch.cuda.is_available() else "cpu"
     dataset = dataset_from_dgl_built(dataset_name=dataset_name)
     graph = dataset[0].to(device)
     n_classes = dataset.num_classes

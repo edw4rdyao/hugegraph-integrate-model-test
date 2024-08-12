@@ -37,10 +37,7 @@ def grace_test(
         wd=1e-5,
         gpu=0
 ):
-    if gpu != -1 and torch.cuda.is_available():
-        device = "cuda:{}".format(gpu)
-    else:
-        device = "cpu"
+    device = "cuda:{}".format(gpu) if gpu != -1 and torch.cuda.is_available() else "cpu"
     act_fn = ({"relu": nn.ReLU(), "prelu": nn.PReLU()})[act_fn]
 
     drop_edge_rate_1 = drop_edge_rates[dataset_name][0]

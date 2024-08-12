@@ -23,10 +23,7 @@ def dgi_test(
         early_stopping=40,
         weight_decay=0
 ):
-    if gpu != -1 and torch.cuda.is_available():
-        device = "cuda:{}".format(gpu)
-    else:
-        device = "cpu"
+    device = "cuda:{}".format(gpu) if gpu != -1 and torch.cuda.is_available() else "cpu"
 
     dataset = dataset_from_dgl_built(dataset_name)
     graph = dataset[0]
