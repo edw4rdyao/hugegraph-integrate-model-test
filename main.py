@@ -1,4 +1,5 @@
 from tests.dgi_test import dgi_test
+from tests.evolve_gcn_test import evolve_gcn_test
 from tests.grace_test import grace_test
 from tests.grand_test import grand_test
 from tests.han_test import han_test
@@ -35,3 +36,6 @@ grand_test(dataset_name="pubmed", order=5, sample=4, lam=1.0, temp=0.2, p_drop_i
 # han test
 han_test(dataset_name="acm", n_hidden=4, p_drop=0.6, n_heads=[8],
          lr=0.005, wd=0.001, n_epochs=200, seed=42)
+
+# evolve gcn test
+evolve_gcn_test(dataset_name="elliptic")

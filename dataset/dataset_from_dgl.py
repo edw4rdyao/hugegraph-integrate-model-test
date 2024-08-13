@@ -26,7 +26,6 @@ def dataset_from_dgl_download(dataset_name):
         return load_acm_dataset()
     elif dataset_name == "elliptic":
         return load_elliptic_dataset()
-
     else:
         raise ValueError("do not support")
 
@@ -104,6 +103,7 @@ def load_elliptic_dataset():
     num_classes = 2
 
     return g, node_mask_by_time, num_classes
+
 
 def process_raw_data(raw_dir, processed_dir):
     r"""
