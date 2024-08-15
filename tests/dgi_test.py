@@ -53,7 +53,7 @@ def dgi_test(
     cnt_wait = 0
     best_loss = 1e9
     epochs = trange(n_dgi_epochs)
-    for _ in epochs:
+    for epoch in epochs:
         dgi.train()
 
         dgi_opt.zero_grad()
@@ -72,7 +72,7 @@ def dgi_test(
             print("Early stopping!")
             break
 
-        epochs.set_description("Train Loss {:.4f}".format(loss.item()))
+        epochs.set_description("epoch {} | train loss {:.4f}".format(epoch, loss.item()))
 
     best_dgi_model.eval()
     embeds = best_dgi_model.encoder(graph, feats, corrupt=False)
@@ -88,7 +88,7 @@ def dgi_test(
     )
     # train classifier
     epochs = trange(n_clf_epochs)
-    for _ in epochs:
+    for epoch in epochs:
         clf.train()
 
         classifier_optimizer.zero_grad()
@@ -97,7 +97,7 @@ def dgi_test(
         loss.backward()
         classifier_optimizer.step()
 
-        epochs.set_description("Train Loss {:.4f}".format(loss.item()))
+        epochs.set_description("epoch {} | train loss {:.4f}".format(epoch, loss.item()))
 
     clf.eval()
     with torch.no_grad():

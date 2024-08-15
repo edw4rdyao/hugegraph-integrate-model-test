@@ -63,7 +63,7 @@ def grace_test(
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 
     epochs = trange(n_epochs)
-    for _ in epochs:
+    for epoch in epochs:
         model.train()
         optimizer.zero_grad()
         graph1, feat1 = generating_views(graph, feats, drop_feat_rate_1, drop_edge_rate_1)
@@ -79,7 +79,7 @@ def grace_test(
         loss.backward()
         optimizer.step()
 
-        epochs.set_description("Train Loss {:.4f}".format(loss.item()))
+        epochs.set_description("epoch {} | train loss {:.4f}".format(epoch, loss.item()))
 
     graph = dgl.remove_self_loop(graph)
     graph = dgl.add_self_loop(graph)

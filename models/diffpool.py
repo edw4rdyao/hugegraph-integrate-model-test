@@ -5,19 +5,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import init
+from dgl.nn.pytorch import SAGEConv
 
 
 class DiffPool(nn.Module):
-    """
-    DiffPool Fuse
-    """
-
     def __init__(
             self,
-            input_dim,
-            hidden_dim,
-            embedding_dim,
-            label_dim,
+            n_input_feat,
+            n_hidden,
+            n_embedding,
+            n_out,
             activation,
             n_layers,
             dropout,
@@ -25,7 +22,7 @@ class DiffPool(nn.Module):
             linkpred,
             batch_size,
             aggregator_type,
-            assign_dim,
+            n_assign,
             pool_ratio,
             cat=False,
     ):
@@ -43,36 +40,59 @@ class DiffPool(nn.Module):
 
         # list of GNN modules, each list after one diffpool operation
         self.gc_after_pool = nn.ModuleList()
-        self.assign_dim = assign_dim
+        self.assign_dim = n_assign
         self.bn = True
         self.num_aggs = 1
 
         # constructing layers before diffpool
         assert n_layers >= 3, "n_layers too few"
         self.gc_before_pool.append(
-            GraphSageLayer(
-                input_dim,
-                hidden_dim,
-                activation,
-                dropout,
+            # GraphSageLayer(
+            #     n_input_feat,
+            #     n_hidden,
+            #     activation,
+            #     dropout,
+            #     aggregator_type,
+            #     self.bn,
+            # )
+            SAGEConv(
+                n_input_feat,
+                n_hidden,
                 aggregator_type,
-                self.bn,
+                feat_drop=dropout,
+                activation=activation,
+                bias=self.bn
             )
         )
         for _ in range(n_layers - 2):
             self.gc_before_pool.append(
-                GraphSageLayer(
-                    hidden_dim,
-                    hidden_dim,
-                    activation,
-                    dropout,
+                # GraphSageLayer(
+                #     n_hidden,
+                #     n_hidden,
+                #     activation,
+                #     dropout,
+                #     aggregator_type,
+                #     self.bn,
+                # )
+                SAGEConv(
+                    n_hidden,
+                    n_hidden,
                     aggregator_type,
-                    self.bn,
+                    feat_drop=dropout,
+                    activation=activation,
+                    bias=self.bn
                 )
             )
         self.gc_before_pool.append(
-            GraphSageLayer(
-                hidden_dim, embedding_dim, None, dropout, aggregator_type
+            # GraphSageLayer(
+            #     n_hidden, n_embedding, None, dropout, aggregator_type
+            # )
+            SAGEConv(
+                n_hidden,
+                n_embedding,
+                aggregator_type,
+                feat_drop=dropout,
+                activation=None,
             )
         )
 
@@ -81,14 +101,14 @@ class DiffPool(nn.Module):
         if self.concat:
             # diffpool layer receive pool_embedding_dim node feature tensor
             # and return pool_embedding_dim node embedding
-            pool_embedding_dim = hidden_dim * (n_layers - 1) + embedding_dim
+            pool_embedding_dim = n_hidden * (n_layers - 1) + n_embedding
         else:
-            pool_embedding_dim = embedding_dim
+            pool_embedding_dim = n_embedding
 
         self.first_diffpool_layer = DiffPoolBatchedGraphLayer(
             pool_embedding_dim,
             self.assign_dim,
-            hidden_dim,
+            n_hidden,
             activation,
             dropout,
             aggregator_type,
@@ -97,8 +117,8 @@ class DiffPool(nn.Module):
 
         gc_after_per_pool = nn.ModuleList()
         for _ in range(n_layers - 1):
-            gc_after_per_pool.append(BatchedGraphSAGE(hidden_dim, hidden_dim))
-        gc_after_per_pool.append(BatchedGraphSAGE(hidden_dim, embedding_dim))
+            gc_after_per_pool.append(BatchedGraphSAGE(n_hidden, n_hidden))
+        gc_after_per_pool.append(BatchedGraphSAGE(n_hidden, n_embedding))
         self.gc_after_pool.append(gc_after_per_pool)
 
         self.assign_dim = int(self.assign_dim * pool_ratio)
@@ -108,17 +128,17 @@ class DiffPool(nn.Module):
                 BatchedDiffPool(
                     pool_embedding_dim,
                     self.assign_dim,
-                    hidden_dim,
+                    n_hidden,
                     self.link_pred,
                 )
             )
             gc_after_per_pool = nn.ModuleList()
             for _ in range(n_layers - 1):
                 gc_after_per_pool.append(
-                    BatchedGraphSAGE(hidden_dim, hidden_dim)
+                    BatchedGraphSAGE(n_hidden, n_hidden)
                 )
             gc_after_per_pool.append(
-                BatchedGraphSAGE(hidden_dim, embedding_dim)
+                BatchedGraphSAGE(n_hidden, n_embedding)
             )
             self.gc_after_pool.append(gc_after_per_pool)
             assign_dims.append(self.assign_dim)
@@ -130,8 +150,8 @@ class DiffPool(nn.Module):
                     pool_embedding_dim * self.num_aggs * (n_pooling + 1)
             )
         else:
-            self.pred_input_dim = embedding_dim * self.num_aggs
-        self.pred_layer = nn.Linear(self.pred_input_dim, label_dim)
+            self.pred_input_dim = n_embedding * self.num_aggs
+        self.pred_layer = nn.Linear(self.pred_input_dim, n_out)
 
         # weight initialization
         for m in self.modules():
@@ -169,13 +189,12 @@ class DiffPool(nn.Module):
             block = h
         return block
 
-    def forward(self, g):
+    def forward(self, g, feat):
         self.link_pred_loss = []
         self.entropy_loss = []
-        h = g.ndata["feat"]
+        h = feat
         # node feature for assignment matrix computation is the same as the
         # original node feature
-        h_a = h
 
         out_all = []
 
@@ -405,49 +424,6 @@ class GraphSageLayer(nn.Module):
         return h
 
 
-class GraphSage(nn.Module):
-    """
-    Grahpsage network that concatenate several graphsage layer
-    """
-
-    def __init__(
-            self,
-            in_feats,
-            n_hidden,
-            n_classes,
-            n_layers,
-            activation,
-            dropout,
-            aggregator_type,
-    ):
-        super(GraphSage, self).__init__()
-        self.layers = nn.ModuleList()
-
-        # input layer
-        self.layers.append(
-            GraphSageLayer(
-                in_feats, n_hidden, activation, dropout, aggregator_type
-            )
-        )
-        # hidden layers
-        for _ in range(n_layers - 1):
-            self.layers.append(
-                GraphSageLayer(
-                    n_hidden, n_hidden, activation, dropout, aggregator_type
-                )
-            )
-        # output layer
-        self.layers.append(
-            GraphSageLayer(n_hidden, n_classes, None, dropout, aggregator_type)
-        )
-
-    def forward(self, g, features):
-        h = features
-        for layer in self.layers:
-            h = layer(g, h)
-        return h
-
-
 class DiffPoolBatchedGraphLayer(nn.Module):
     def __init__(
             self,
@@ -464,11 +440,25 @@ class DiffPoolBatchedGraphLayer(nn.Module):
         self.assign_dim = assign_dim
         self.hidden_dim = output_feat_dim
         self.link_pred = link_pred
-        self.feat_gc = GraphSageLayer(
-            input_dim, output_feat_dim, activation, dropout, aggregator_type
+        # self.feat_gc = GraphSageLayer(
+        #     input_dim, output_feat_dim, activation, dropout, aggregator_type
+        # )
+        # self.pool_gc = GraphSageLayer(
+        #     input_dim, assign_dim, activation, dropout, aggregator_type
+        # )
+        self.feat_gc = SAGEConv(
+            input_dim,
+            output_feat_dim,
+            aggregator_type,
+            feat_drop=dropout,
+            activation=activation,
         )
-        self.pool_gc = GraphSageLayer(
-            input_dim, assign_dim, activation, dropout, aggregator_type
+        self.pool_gc = SAGEConv(
+            input_dim,
+            assign_dim,
+            aggregator_type,
+            feat_drop=dropout,
+            activation=activation,
         )
         self.reg_loss = nn.ModuleList([])
         self.loss_log = {}

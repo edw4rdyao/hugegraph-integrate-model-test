@@ -95,7 +95,7 @@ def evolve_gcn_test(
 
         valid_f1 = f1_score(all_labels, all_preds, average='binary', pos_label=eval_class_id)
         epochs.set_description(
-            "Train f1 {:.4f} | Val f1 {:.4f}".format(train_f1, valid_f1)
+            "epoch {} | train f1 {:.4f} | val f1 {:.4f}".format(epoch, train_f1, valid_f1)
         )
 
         if valid_f1 > best_valid_f1:

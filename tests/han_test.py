@@ -57,7 +57,7 @@ def han_test(
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 
     epochs = trange(n_epochs)
-    for _ in epochs:
+    for epoch in epochs:
         model.train()
         logits = model(graphs, feats)
         train_loss = loss_fn(logits[train_mask], labels[train_mask])
@@ -76,8 +76,8 @@ def han_test(
             val_acc = accuracy_score(labels[val_mask].cpu(), val_preds.cpu())
 
         epochs.set_description(
-            "Train Loss {:.4f} | Train Acc: {:.4f} | Val Loss {:.4f} | Val Acc {:.4f}".format(
-                train_loss.item(), train_acc, val_loss.item(), val_acc
+            "epoch {} | tloss {:.4f} | tacc: {:.4f} | vloss {:.4f} | vacc {:.4f}".format(
+                epoch, train_loss.item(), train_acc, val_loss.item(), val_acc
             )
         )
 

@@ -166,4 +166,4 @@ cython_debug/
 
 .idea/
 
-demo.py
+demo*.py

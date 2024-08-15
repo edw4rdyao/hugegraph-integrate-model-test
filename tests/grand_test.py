@@ -61,7 +61,7 @@ def grand_test(
     best_acc = 0
 
     epochs = trange(n_epochs)
-    for _ in epochs:
+    for epoch in epochs:
         model.train()
         logits = model(graph, feats)
         # calculate supervised loss
@@ -86,8 +86,8 @@ def grand_test(
             val_acc = accuracy_score(labels[val_idx].cpu(), val_preds.cpu())
 
             epochs.set_description(
-                "Train Loss {:.4f} | Val Acc {:.4f} | Val Loss {:.4f}".format(
-                    train_loss.item(), val_acc, val_loss.item(),
+                "epoch {:04d} | tloss {:.4f} | vacc {:.4f} | vloss {:.4f}".format(
+                    epoch, train_loss.item(), val_acc, val_loss.item(),
                 )
             )
 
@@ -99,7 +99,7 @@ def grand_test(
             else:
                 cnt_wait += 1
                 if cnt_wait == early_stopping:
-                    print("Early stopping.")
+                    print("early stopping in epoch {}".format(epoch))
                     break
 
     best_model.eval()

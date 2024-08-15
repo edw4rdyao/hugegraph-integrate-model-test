@@ -48,7 +48,7 @@ def jknet_test(
     loss_fn = nn.CrossEntropyLoss()
     opt = optim.Adam(model.parameters(), lr=lr, weight_decay=lamb)
     epochs = trange(n_epochs)
-    for _ in epochs:
+    for epoch in epochs:
         model.train()
         logits = model(graph, feats)
 
@@ -67,8 +67,8 @@ def jknet_test(
             valid_acc = accuracy_score(labels[val_idx].cpu(), valid_preds.cpu())
 
         epochs.set_description(
-            "Train Acc {:.4f} | Train Loss {:.4f} | Val Acc {:.4f} | Val loss {:.4f}".format(
-                train_acc, train_loss.item(), valid_acc, valid_loss.item()
+            "epoch {} | tacc {:.4f} | tloss {:.4f} | vacc {:.4f} | vloss {:.4f}".format(
+                epoch, train_acc, train_loss.item(), valid_acc, valid_loss.item()
             )
         )
 
