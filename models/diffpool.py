@@ -1,11 +1,20 @@
+"""
+DiffPool (Differentiable Pooling)
+
+References
+----------
+Paper: https://arxiv.org/abs/1806.08804
+Author's code: https://github.com/RexYing/diffpool
+Ref DGL code: https://github.com/dmlc/dgl/tree/master/examples/pytorch/diffpool
+"""
+
 import dgl
-import dgl.function as fn
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn import init
 from dgl.nn.pytorch import SAGEConv
+from torch.nn import init
 
 
 class DiffPool(nn.Module):
@@ -47,14 +56,6 @@ class DiffPool(nn.Module):
         # constructing layers before diffpool
         assert n_layers >= 3, "n_layers too few"
         self.gc_before_pool.append(
-            # GraphSageLayer(
-            #     n_input_feat,
-            #     n_hidden,
-            #     activation,
-            #     dropout,
-            #     aggregator_type,
-            #     self.bn,
-            # )
             SAGEConv(
                 n_input_feat,
                 n_hidden,
@@ -66,14 +67,6 @@ class DiffPool(nn.Module):
         )
         for _ in range(n_layers - 2):
             self.gc_before_pool.append(
-                # GraphSageLayer(
-                #     n_hidden,
-                #     n_hidden,
-                #     activation,
-                #     dropout,
-                #     aggregator_type,
-                #     self.bn,
-                # )
                 SAGEConv(
                     n_hidden,
                     n_hidden,
@@ -84,9 +77,6 @@ class DiffPool(nn.Module):
                 )
             )
         self.gc_before_pool.append(
-            # GraphSageLayer(
-            #     n_hidden, n_embedding, None, dropout, aggregator_type
-            # )
             SAGEConv(
                 n_hidden,
                 n_embedding,
@@ -379,51 +369,6 @@ class BatchedDiffPool(nn.Module):
         return xnext, anext
 
 
-class GraphSageLayer(nn.Module):
-    """
-    GraphSage layer in Inductive learning paper by hamilton
-    Here, graphsage layer is a reduced function in DGL framework
-    """
-
-    def __init__(
-            self,
-            in_feats,
-            out_feats,
-            activation,
-            dropout,
-            aggregator_type,
-            bn=False,
-            bias=True,
-    ):
-        super(GraphSageLayer, self).__init__()
-        self.use_bn = bn
-        self.bundler = Bundler(
-            in_feats, out_feats, activation, dropout, bias=bias
-        )
-        self.dropout = nn.Dropout(p=dropout)
-
-        if aggregator_type == "maxpool":
-            self.aggregator = MaxPoolAggregator(
-                in_feats, in_feats, activation, bias
-            )
-        elif aggregator_type == "lstm":
-            self.aggregator = LSTMAggregator(in_feats, in_feats)
-        else:
-            self.aggregator = MeanAggregator()
-
-    def forward(self, g, h):
-        h = self.dropout(h)
-        g.ndata["h"] = h
-        if self.use_bn and not hasattr(self, "bn"):
-            device = h.device
-            self.bn = nn.BatchNorm1d(h.size()[1]).to(device)
-        g.update_all(fn.copy_u(u="h", out="m"), self.aggregator, self.bundler)
-        if self.use_bn:
-            h = self.bn(h)
-        h = g.ndata.pop("h")
-        return h
-
-
 class DiffPoolBatchedGraphLayer(nn.Module):
     def __init__(
             self,
@@ -440,12 +385,6 @@ class DiffPoolBatchedGraphLayer(nn.Module):
         self.assign_dim = assign_dim
         self.hidden_dim = output_feat_dim
         self.link_pred = link_pred
-        # self.feat_gc = GraphSageLayer(
-        #     input_dim, output_feat_dim, activation, dropout, aggregator_type
-        # )
-        # self.pool_gc = GraphSageLayer(
-        #     input_dim, assign_dim, activation, dropout, aggregator_type
-        # )
         self.feat_gc = SAGEConv(
             input_dim,
             output_feat_dim,
@@ -494,135 +433,6 @@ class DiffPoolBatchedGraphLayer(nn.Module):
             self.loss_log[loss_name] = loss_layer(adj, adj_new, assign_tensor)
 
         return adj_new, h
-
-
-class Bundler(nn.Module):
-    """
-    Bundler, which will be the node_apply function in DGL paradigm
-    """
-
-    def __init__(self, in_feats, out_feats, activation, dropout, bias=True):
-        super(Bundler, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-        self.linear = nn.Linear(in_feats * 2, out_feats, bias)
-        self.activation = activation
-
-        nn.init.xavier_uniform_(
-            self.linear.weight, gain=nn.init.calculate_gain("relu")
-        )
-
-    def concat(self, h, aggre_result):
-        bundle = torch.cat((h, aggre_result), 1)
-        bundle = self.linear(bundle)
-        return bundle
-
-    def forward(self, node):
-        h = node.data["h"]
-        c = node.data["c"]
-        bundle = self.concat(h, c)
-        bundle = F.normalize(bundle, p=2, dim=1)
-        if self.activation:
-            bundle = self.activation(bundle)
-        return {"h": bundle}
-
-
-class Aggregator(nn.Module):
-    """
-    Base Aggregator class. Adapting
-    from PR# 403
-
-    This class is not supposed to be called
-    """
-
-    def __init__(self):
-        super(Aggregator, self).__init__()
-
-    def forward(self, node):
-        neighbour = node.mailbox["m"]
-        c = self.aggre(neighbour)
-        return {"c": c}
-
-    def aggre(self, neighbour):
-        # N x F
-        raise NotImplementedError
-
-
-class MeanAggregator(Aggregator):
-    """
-    Mean Aggregator for graphsage
-    """
-
-    def __init__(self):
-        super(MeanAggregator, self).__init__()
-
-    def aggre(self, neighbour):
-        mean_neighbour = torch.mean(neighbour, dim=1)
-        return mean_neighbour
-
-
-class MaxPoolAggregator(Aggregator):
-    """
-    Maxpooling aggregator for graphsage
-    """
-
-    def __init__(self, in_feats, out_feats, activation, bias):
-        super(MaxPoolAggregator, self).__init__()
-        self.linear = nn.Linear(in_feats, out_feats, bias=bias)
-        self.activation = activation
-        # xavier initialization of weight
-        nn.init.xavier_uniform_(
-            self.linear.weight, gain=nn.init.calculate_gain("relu")
-        )
-
-    def aggre(self, neighbour):
-        neighbour = self.linear(neighbour)
-        if self.activation:
-            neighbour = self.activation(neighbour)
-        maxpool_neighbour = torch.max(neighbour, dim=1)[0]
-        return maxpool_neighbour
-
-
-class LSTMAggregator(Aggregator):
-    """
-    LSTM aggregator for graphsage
-    """
-
-    def __init__(self, in_feats, hidden_feats):
-        super(LSTMAggregator, self).__init__()
-        self.lstm = nn.LSTM(in_feats, hidden_feats, batch_first=True)
-        self.hidden_dim = hidden_feats
-        self.hidden = self.init_hidden()
-
-        nn.init.xavier_uniform_(
-            self.lstm.weight, gain=nn.init.calculate_gain("relu")
-        )
-
-    def init_hidden(self):
-        """
-        Defaulted to initialite all zero
-        """
-        return (
-            torch.zeros(1, 1, self.hidden_dim),
-            torch.zeros(1, 1, self.hidden_dim),
-        )
-
-    def aggre(self, neighbours):
-        """
-        aggregation function
-        """
-        # N X F
-        rand_order = torch.randperm(neighbours.size()[1])
-        neighbours = neighbours[:, rand_order, :]
-
-        (lstm_out, self.hidden) = self.lstm(
-            neighbours.view(neighbours.size()[0], neighbours.size()[1], -1)
-        )
-        return lstm_out[:, -1, :]
-
-    def forward(self, node):
-        neighbour = node.mailbox["m"]
-        c = self.aggre(neighbour)
-        return {"c": c}
 
 
 class EntropyLoss(nn.Module):

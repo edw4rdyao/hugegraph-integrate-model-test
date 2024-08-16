@@ -15,62 +15,92 @@ from dgl.nn.pytorch import GraphConv, JumpingKnowledge
 
 class JKNet(nn.Module):
     """
-    Jumping Knowledge Network (JKNet) model.
+    Jumping Knowledge Network (JKNet) model for learning node representations on graphs.
 
     Parameters
     ----------
     n_in_feats : int
-        Number of input features.
+        Number of input features per node.
     n_hidden : int
-        Number of hidden units.
+        Number of hidden units in each GraphConv layer.
     n_out_feats : int
-        Number of output features.
+        Number of output features or classes.
     n_layers : int, optional
-        Number of GNN layers, by default 1.
+        Number of GraphConv layers. Default is 1.
     mode : str, optional
-        Jumping Knowledge mode ('cat', 'max', 'lstm'), by default "cat".
+        Jumping Knowledge mode ('cat', 'max', 'lstm'). Default is "cat".
     dropout : float, optional
-        Dropout rate, by default 0.0.
+        Dropout rate applied after each GraphConv layer. Default is 0.0.
     """
 
     def __init__(self, n_in_feats, n_hidden, n_out_feats, n_layers=1, mode="cat", dropout=0.0):
         super(JKNet, self).__init__()
         self.mode = mode
-        self.dropout = nn.Dropout(dropout)  # Dropout layer
+        self.dropout = nn.Dropout(dropout)  # Dropout layer to prevent overfitting
 
-        self.layers = nn.ModuleList()  # List of GraphConv layers
-        self.layers.append(GraphConv(n_in_feats, n_hidden, activation=F.relu))  # Input layer
+        self.layers = nn.ModuleList()  # List to hold GraphConv layers
+        # Add the first GraphConv layer (input layer)
+        self.layers.append(GraphConv(n_in_feats, n_hidden, activation=F.relu))
+        # Add additional GraphConv layers (hidden layers)
         for _ in range(n_layers):
-            self.layers.append(GraphConv(n_hidden, n_hidden, activation=F.relu))  # Hidden layers
+            self.layers.append(GraphConv(n_hidden, n_hidden, activation=F.relu))
 
+        # Initialize Jumping Knowledge module
         if self.mode == "lstm":
-            self.jump = JumpingKnowledge(mode, n_hidden, n_layers)  # Jumping Knowledge with LSTM
+            self.jump = JumpingKnowledge(mode, n_hidden, n_layers)  # JKNet with LSTM for aggregating representations
         else:
-            self.jump = JumpingKnowledge(mode)  # Jumping Knowledge without LSTM
+            # JKNet with concatenation or max pooling for aggregating representations
+            self.jump = JumpingKnowledge(mode)
 
+        # Adjust hidden size for concatenation mode
         if self.mode == "cat":
-            n_hidden = n_hidden * (n_layers + 1)  # Adjust hidden size for concatenation mode
+            # Multiply by (n_layers + 1) because all layer outputs are concatenated
+            n_hidden = n_hidden * (n_layers + 1)
 
-        self.output_layer = nn.Linear(n_hidden, n_out_feats)  # Output layer
-        self.reset_params()
+        # Output layer for final prediction
+        self.output_layer = nn.Linear(n_hidden, n_out_feats)
+        self.reset_params()  # Initialize the model parameters
 
     def reset_params(self):
+        """
+        Reset parameters of the model.
+        """
         for layer in self.layers:
-            layer.reset_parameters()  # Reset parameters of GraphConv layers
-        self.jump.reset_parameters()  # Reset parameters of Jumping Knowledge
-        self.output_layer.reset_parameters()  # Reset parameters of output layer
+            layer.reset_parameters()  # Reset GraphConv layer parameters
+        self.jump.reset_parameters()  # Reset JumpingKnowledge parameters
+        self.output_layer.reset_parameters()  # Reset output layer parameters
 
     def forward(self, graph, feats):
+        """
+        Forward pass through the JKNet model.
+
+        Parameters
+        ----------
+        graph : dgl.DGLGraph
+            The input graph.
+        feats : torch.Tensor
+            Node features.
+
+        Returns
+        -------
+        torch.Tensor
+            The final node representations or predictions.
+        """
         hidden_representations = []
         for layer in self.layers:
-            feats = self.dropout(layer(graph, feats))  # Apply GraphConv and dropout
-            hidden_representations.append(feats)  # Collect hidden representations
+            feats = self.dropout(layer(graph, feats))  # Apply GraphConv layer and dropout
+            hidden_representations.append(feats)  # Collect hidden representations from each layer
 
         if self.mode == "lstm":
             self.jump.lstm.flatten_parameters()  # Flatten LSTM parameters for efficiency
+
         # Apply Jumping Knowledge to aggregate hidden representations
         graph.ndata["h"] = self.jump(hidden_representations)
-        # Message passing: copy node data to messages, then sum messages
+
+        # Message passing: aggregate node information using sum operation
         graph.update_all(fn.copy_u("h", "m"), fn.sum("m", "h"))
-        h = self.output_layer(graph.ndata["h"])  # Apply the output layer
-        return h  # Return the final node representations
+
+        # Apply the output layer to the aggregated node features
+        h = self.output_layer(graph.ndata["h"])
+
+        return h  # Return the final node representations or predictions

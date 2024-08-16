@@ -14,7 +14,7 @@ from models.diffpool import DiffPool
 
 
 def diffpool_test(
-        dataset_name="ENZYMES",
+        dataset_name,
         train_ratio=0.7,
         test_ratio=0.1,
         batch_size=20,

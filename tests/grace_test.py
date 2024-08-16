@@ -12,13 +12,13 @@ from tqdm import trange
 from dataset.dataset_from_dgl import dataset_from_dgl_built
 from models import GRACE
 
-drop_edge_rates = {
+edges_removing_rates = {
     "cora": [0.2, 0.4],
     "citeseer": [0.2, 0.0],
     "pubmed": [0.4, 0.1]
 }
 
-drop_feat_rates = {
+feats_masking_rates = {
     "cora": [0.3, 0.4],
     "citeseer": [0.3, 0.2],
     "pubmed": [0.0, 0.2]
@@ -40,15 +40,16 @@ def grace_test(
     device = "cuda:{}".format(gpu) if gpu != -1 and torch.cuda.is_available() else "cpu"
     act_fn = ({"relu": nn.ReLU(), "prelu": nn.PReLU()})[act_fn]
 
-    drop_edge_rate_1 = drop_edge_rates[dataset_name][0]
-    drop_edge_rate_2 = drop_edge_rates[dataset_name][1]
-    drop_feat_rate_1 = drop_feat_rates[dataset_name][0]
-    drop_feat_rate_2 = drop_feat_rates[dataset_name][1]
+    edges_removing_rate_1 = edges_removing_rates[dataset_name][0]
+    edges_removing_rate_2 = edges_removing_rates[dataset_name][1]
+    feats_masking_rate_1 = feats_masking_rates[dataset_name][0]
+    feats_masking_rate_2 = feats_masking_rates[dataset_name][1]
 
     dataset = dataset_from_dgl_built(dataset_name=dataset_name)
     graph = dataset[0]
     feats = torch.FloatTensor(graph.ndata["feat"]).to(device)
     labels = torch.LongTensor(graph.ndata["label"]).to(device)
+    graph = graph.to(device)
     n_in_feats = feats.shape[1]
 
     model = GRACE(
@@ -57,7 +58,11 @@ def grace_test(
         n_out_feats,
         n_layers,
         act_fn,
-        temp
+        temp,
+        edges_removing_rate_1,
+        edges_removing_rate_2,
+        feats_masking_rate_1,
+        feats_masking_rate_2,
     )
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
@@ -66,20 +71,12 @@ def grace_test(
     for epoch in epochs:
         model.train()
         optimizer.zero_grad()
-        graph1, feat1 = generating_views(graph, feats, drop_feat_rate_1, drop_edge_rate_1)
-        graph2, feat2 = generating_views(graph, feats, drop_feat_rate_2, drop_edge_rate_2)
-        graph1 = graph1.to(device)
-        graph2 = graph2.to(device)
-        feat1 = feat1.to(device)
-        feat2 = feat2.to(device)
-
-        z1 = model(graph1, feat1)
-        z2 = model(graph2, feat2)
-        loss = model.loss(z1, z2)
+        loss = model(graph, feats)
         loss.backward()
         optimizer.step()
 
         epochs.set_description("epoch {} | train loss {:.4f}".format(epoch, loss.item()))
+        torch.cuda.empty_cache()
 
     graph = dgl.remove_self_loop(graph)
     graph = dgl.add_self_loop(graph)
@@ -88,37 +85,6 @@ def grace_test(
     embeds = model.get_embedding(graph, feats)
     acc = classification(embeds, labels)
     print("GRACE: dataset {} test accuracy {:.4f}".format(dataset_name, acc))
-    torch.cuda.empty_cache()
-
-
-# Data augmentation on graphs via edge dropping and feature masking
-def generating_views(graph, x, feat_drop_rate, edge_mask_rate):
-    edge_mask_idx = get_mask_edge_idx(graph, edge_mask_rate)
-    src = graph.edges()[0]
-    dst = graph.edges()[1]
-    new_src = src[edge_mask_idx]
-    new_dst = dst[edge_mask_idx]
-
-    new_graph = dgl.graph((new_src, new_dst), num_nodes=graph.num_nodes())
-    new_graph = dgl.add_self_loop(new_graph)
-    dropped_feat = drop_feat(x, feat_drop_rate)
-
-    return new_graph, dropped_feat
-
-
-def get_mask_edge_idx(graph, edge_mask_rate):
-    E = graph.num_edges()
-    mask_rates = torch.FloatTensor(np.ones(E) * edge_mask_rate)
-    masks = torch.bernoulli(1 - mask_rates)
-    mask_idx = masks.nonzero().squeeze(1)
-    return mask_idx
-
-
-def drop_feat(x, drop_prob):
-    drop_mask = torch.rand(x.size(1), dtype=torch.float32, device=x.device) < drop_prob
-    x = x.clone()
-    x[:, drop_mask] = 0
-    return x
 
 
 def classification(embeddings, y):

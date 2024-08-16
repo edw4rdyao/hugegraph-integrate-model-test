@@ -73,6 +73,7 @@ def dgi_test(
             break
 
         epochs.set_description("epoch {} | train loss {:.4f}".format(epoch, loss.item()))
+        torch.cuda.empty_cache()
 
     best_dgi_model.eval()
     embeds = best_dgi_model.encoder(graph, feats, corrupt=False)
@@ -98,6 +99,7 @@ def dgi_test(
         classifier_optimizer.step()
 
         epochs.set_description("epoch {} | train loss {:.4f}".format(epoch, loss.item()))
+        torch.cuda.empty_cache()
 
     clf.eval()
     with torch.no_grad():
@@ -107,4 +109,3 @@ def dgi_test(
         acc = correct / test_mask.sum().item()
 
     print("DGI: dataset {} test accuracy {:.4f}".format(dataset_name, acc))
-    torch.cuda.empty_cache()
