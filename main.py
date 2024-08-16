@@ -19,10 +19,10 @@ grace_test(dataset_name="pubmed", lr=1e-3, n_hidden=256, n_out_feats=256, act_fn
 # jknet test
 jknet_test(dataset_name="cora", n_layers=6, mode="max")
 jknet_test(dataset_name="cora", n_layers=6, mode="cat")
-jknet_test(dataset_name="cora", n_layers=6, mode="lstm")
-jknet_test(dataset_name="citeseer", n_layers=6, mode="max")
-jknet_test(dataset_name="citeseer", n_layers=6, mode="cat")
-jknet_test(dataset_name="citeseer", n_layers=6, mode="lstm")
+jknet_test(dataset_name="cora", n_layers=1, mode="lstm")
+jknet_test(dataset_name="citeseer", n_layers=1, mode="max")
+jknet_test(dataset_name="citeseer", n_layers=1, mode="cat")
+jknet_test(dataset_name="citeseer", n_layers=2, mode="lstm")
 
 # grand test
 grand_test(dataset_name="cora", order=8, sample=4, lam=1.0, temp=0.5, p_drop_input=0.5, p_drop_hidden=0.5,
