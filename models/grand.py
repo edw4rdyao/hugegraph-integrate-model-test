@@ -1,157 +1,243 @@
-import dgl.function as fn
+"""
+GRAND (Graph Random Neural Network)
+
+References
+----------
+Paper: https://arxiv.org/abs/2005.11079
+Author's code: https://github.com/THUDM/GRAND
+DGL code: https://github.com/dmlc/dgl/tree/master/examples/pytorch/grand
+"""
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-
-def drop_node(feats, drop_rate, training):
-    n = feats.shape[0]
-    drop_rates = torch.FloatTensor(np.ones(n) * drop_rate)
-
-    if training:
-        masks = torch.bernoulli(1.0 - drop_rates).unsqueeze(1)
-        feats = masks.to(feats.device) * feats
-
-    else:
-        feats = feats * (1.0 - drop_rate)
-
-    return feats
-
-
-class MLP(nn.Module):
-    def __init__(
-        self, nfeat, nhid, nclass, input_droprate, hidden_droprate, use_bn=False
-    ):
-        super(MLP, self).__init__()
-
-        self.layer1 = nn.Linear(nfeat, nhid, bias=True)
-        self.layer2 = nn.Linear(nhid, nclass, bias=True)
-
-        self.input_dropout = nn.Dropout(input_droprate)
-        self.hidden_dropout = nn.Dropout(hidden_droprate)
-        self.bn1 = nn.BatchNorm1d(nfeat)
-        self.bn2 = nn.BatchNorm1d(nhid)
-        self.use_bn = use_bn
-
-    def reset_parameters(self):
-        self.layer1.reset_parameters()
-        self.layer2.reset_parameters()
-
-    def forward(self, x):
-        if self.use_bn:
-            x = self.bn1(x)
-        x = self.input_dropout(x)
-        x = F.relu(self.layer1(x))
-
-        if self.use_bn:
-            x = self.bn2(x)
-        x = self.hidden_dropout(x)
-        x = self.layer2(x)
-
-        return x
-
-
-def GRANDConv(graph, feats, order):
-    """
-    Parameters
-    -----------
-    graph: dgl.Graph
-        The input graph
-    feats: Tensor (n_nodes * feat_dim)
-        Node features
-    order: int
-        Propagation Steps
-    """
-    with graph.local_scope():
-        """Calculate Symmetric normalized adjacency matrix   \hat{A}"""
-        degs = graph.in_degrees().float().clamp(min=1)
-        norm = torch.pow(degs, -0.5).to(feats.device).unsqueeze(1)
-
-        graph.ndata["norm"] = norm
-        graph.apply_edges(fn.u_mul_v("norm", "norm", "weight"))
-
-        """ Graph Conv """
-        x = feats
-        y = 0 + feats
-
-        for i in range(order):
-            graph.ndata["h"] = x
-            graph.update_all(fn.u_mul_e("h", "weight", "m"), fn.sum("m", "h"))
-            x = graph.ndata.pop("h")
-            y.add_(x)
-
-    return y / (order + 1)
+from dgl.nn.pytorch import GraphConv
 
 
 class GRAND(nn.Module):
-    r"""
+    """
+    Implementation of the GRAND (Graph Random Neural Network) model for graph representation learning.
 
     Parameters
-    -----------
-    in_dim: int
-        Input feature size. i.e, the number of dimensions of: math: `H^{(i)}`.
-    hid_dim: int
-        Hidden feature size.
-    n_class: int
-        Number of classes.
-    S: int
-        Number of Augmentation samples
-    K: int
-        Number of Propagation Steps
-    node_dropout: float
-        Dropout rate on node features.
-    input_dropout: float
-        Dropout rate of the input layer of a MLP
-    hidden_dropout: float
-        Dropout rate of the hidden layer of a MLPx
-    batchnorm: bool, optional
-        If True, use batch normalization.
-
+    ----------
+    n_in_feats : int
+        Number of input features per node.
+    n_hidden : int
+        Number of hidden units in the MLP.
+    n_out_feats : int
+        Number of output features or classes.
+    sample : int
+        Number of augmentations (samples) to generate during training.
+    order : int
+        The number of propagation steps in the graph convolution.
+    p_drop_node : float
+        Dropout rate for nodes during training.
+    p_drop_input : float
+        Dropout rate for input features in the MLP.
+    p_drop_hidden : float
+        Dropout rate for hidden features in the MLP.
+    bn : bool
+        Whether to use batch normalization in the MLP.
     """
 
     def __init__(
-        self,
-        in_dim,
-        hid_dim,
-        n_class,
-        S=1,
-        K=3,
-        node_dropout=0.0,
-        input_droprate=0.0,
-        hidden_droprate=0.0,
-        batchnorm=False,
+            self, n_in_feats, n_hidden, n_out_feats,
+            sample, order, p_drop_node, p_drop_input, p_drop_hidden, bn
     ):
         super(GRAND, self).__init__()
-        self.in_dim = in_dim
-        self.hid_dim = hid_dim
-        self.S = S
-        self.K = K
-        self.n_class = n_class
+        self.sample = sample  # Number of augmentations
+        self.order = order  # Order of propagation steps
 
-        self.mlp = MLP(
-            in_dim, hid_dim, n_class, input_droprate, hidden_droprate, batchnorm
-        )
+        # MLP for final prediction
+        self.mlp = MLP(n_in_feats, n_hidden, n_out_feats, p_drop_input, p_drop_hidden, bn)
+        # Graph convolution layer without trainable weights
+        self.graph_conv = GraphConv(n_in_feats, n_in_feats, norm='both', weight=False, bias=False)
+        self.p_drop_node = p_drop_node  # Dropout rate for nodes
 
-        self.dropout = node_dropout
-        self.node_dropout = nn.Dropout(node_dropout)
+    @staticmethod
+    def consis_loss(logits, temp, lam):
+        """
+        Compute the consistency loss between multiple augmented logits.
 
-    def forward(self, graph, feats, training=True):
-        X = feats
-        S = self.S
+        Parameters
+        ----------
+        logits : list of torch.Tensor
+            List of logits from different augmentations.
+        temp : float
+            Temperature parameter for sharpening the probabilities.
+        lam : float
+            Weight for the consistency loss.
 
-        if training:  # Training Mode
-            output_list = []
-            for s in range(S):
-                drop_feat = drop_node(X, self.dropout, True)  # Drop node
-                feat = GRANDConv(graph, drop_feat, self.K)  # Graph Convolution
-                output_list.append(
-                    torch.log_softmax(self.mlp(feat), dim=-1)
-                )  # Prediction
+        Returns
+        -------
+        torch.Tensor
+            The computed consistency loss.
+        """
+        ps = torch.stack([torch.exp(logit) for logit in logits], dim=2)  # Convert logits to probabilities
+        avg_p = torch.mean(ps, dim=2)  # Average the probabilities across augmentations
+        sharp_p = torch.pow(avg_p, 1.0 / temp)  # Sharpen the probabilities using the temperature
+        sharp_p = sharp_p / sharp_p.sum(dim=1, keepdim=True)  # Normalize the sharpened probabilities
+        sharp_p = sharp_p.unsqueeze(2).detach()  # Detach to prevent gradients flowing through sharp_p
+        loss = lam * torch.mean((ps - sharp_p).pow(2).sum(dim=1))  # Compute the consistency loss
+        return loss
 
-            return output_list
-        else:  # Inference Mode
-            drop_feat = drop_node(X, self.dropout, False)
-            X = GRANDConv(graph, drop_feat, self.K)
+    def drop_node(self, feats):
+        """
+        Randomly drop nodes by applying dropout to the node features.
 
-            return torch.log_softmax(self.mlp(X), dim=-1)
+        Parameters
+        ----------
+        feats : torch.Tensor
+            Node features.
+
+        Returns
+        -------
+        torch.Tensor
+            Node features with dropout applied.
+        """
+        n = feats.shape[0]  # Number of nodes
+        drop_rates = torch.FloatTensor(np.ones(n) * self.p_drop_node).to(feats.device)  # Dropout rates for each node
+        masks = torch.bernoulli(1.0 - drop_rates).unsqueeze(1)  # Generate dropout masks
+        feats = masks.to(feats.device) * feats  # Apply dropout to the node features
+        return feats
+
+    def scale_node(self, feats):
+        """
+        Scale node features to account for dropout.
+
+        Parameters
+        ----------
+        feats : torch.Tensor
+            Node features.
+
+        Returns
+        -------
+        torch.Tensor
+            Scaled node features.
+        """
+        feats = feats * (1.0 - self.p_drop_node)  # Scale the features
+        return feats
+
+    def propagation(self, graph, X):
+        """
+        Propagate node features through the graph using graph convolution.
+
+        Parameters
+        ----------
+        graph : dgl.DGLGraph
+            Input graph.
+        X : torch.Tensor
+            Node features.
+
+        Returns
+        -------
+        torch.Tensor
+            Node features after propagation.
+        """
+        y = X
+        for _ in range(self.order):
+            X = self.graph_conv(graph, X)  # Apply graph convolution
+            y = y + X  # Apply residual connection
+        return y / (self.order + 1)  # Normalize the output by the order of propagation
+
+    def forward(self, graph, feats):
+        """
+        Perform forward pass with multiple augmentations and return logits.
+
+        Parameters
+        ----------
+        graph : dgl.DGLGraph
+            Input graph.
+        feats : torch.Tensor
+            Node features.
+
+        Returns
+        -------
+        list of torch.Tensor
+            Logits from each augmentation.
+        """
+        logits_list = []
+        for _ in range(self.sample):
+            X = self.drop_node(feats)  # Apply node dropout
+            y = self.propagation(graph, X)  # Propagate through the graph
+            logits_list.append(torch.log_softmax(self.mlp(y), dim=-1))  # Compute logits
+        return logits_list
+
+    def inference(self, graph, feats):
+        """
+        Perform inference without augmentation, scaling the node features.
+
+        Parameters
+        ----------
+        graph : dgl.DGLGraph
+            Input graph.
+        feats : torch.Tensor
+            Node features.
+
+        Returns
+        -------
+        torch.Tensor
+            Logits after inference.
+        """
+        X = self.scale_node(feats)  # Scale node features
+        y = self.propagation(graph, X)  # Propagate through the graph
+        return torch.log_softmax(self.mlp(y), dim=-1)  # Compute final logits
+
+
+class MLP(nn.Module):
+    """
+    Multi-Layer Perceptron (MLP) for transforming node features.
+
+    Parameters
+    ----------
+    n_in_feats : int
+        Number of input features.
+    n_hidden : int
+        Number of hidden units.
+    n_out_feats : int
+        Number of output features or classes.
+    p_input_drop : float
+        Dropout rate for input features.
+    p_hidden_drop : float
+        Dropout rate for hidden features.
+    bn : bool
+        Whether to use batch normalization.
+    """
+
+    def __init__(self, n_in_feats, n_hidden, n_out_feats, p_input_drop, p_hidden_drop, bn):
+        super(MLP, self).__init__()
+        self.layer1 = nn.Linear(n_in_feats, n_hidden, bias=True)  # First linear layer
+        self.layer2 = nn.Linear(n_hidden, n_out_feats, bias=True)  # Second linear layer
+        self.input_drop = nn.Dropout(p_input_drop)  # Dropout for input features
+        self.hidden_drop = nn.Dropout(p_hidden_drop)  # Dropout for hidden features
+        self.bn = bn  # Whether to use batch normalization
+        if self.bn:
+            self.bn1 = nn.BatchNorm1d(n_in_feats)  # Batch normalization for input features
+            self.bn2 = nn.BatchNorm1d(n_hidden)  # Batch normalization for hidden features
+
+    def forward(self, x):
+        """
+        Forward pass through the MLP.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input node features.
+
+        Returns
+        -------
+        torch.Tensor
+            Transformed node features.
+        """
+        if self.bn:
+            x = self.bn1(x)  # Apply batch normalization to input features
+        x = self.input_drop(x)  # Apply dropout to input features
+        x = F.relu(self.layer1(x))  # Apply ReLU activation after the first linear layer
+
+        if self.bn:
+            x = self.bn2(x)  # Apply batch normalization to hidden features
+        x = self.hidden_drop(x)  # Apply dropout to hidden features
+        x = self.layer2(x)  # Apply the second linear layer
+
+        return x  # Return final transformed features

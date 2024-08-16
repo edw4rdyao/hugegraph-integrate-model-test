@@ -3,131 +3,341 @@ GRACE (Graph Contrastive Learning)
 
 References
 ----------
-Papers: https://arxiv.org/abs/2006.04131
+Paper: https://arxiv.org/abs/2006.04131
 Author's code: https://github.com/CRIPAC-DIG/GRACE
 DGL code: https://github.com/dmlc/dgl/tree/master/examples/pytorch/grace
 """
-
-import torch as th
+import dgl
+import numpy as np
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from dgl.nn.pytorch import GraphConv
 
 
-class GCN(nn.Module):
-    r"""
-    A Graph Convolutional Network (GCN) module for graph node feature transformation.
+class GRACE(nn.Module):
+    """
+    GRACE model for graph representation learning via contrastive learning.
 
     Parameters
-    -----------
-    n_in_feats: int
+    ----------
+    n_in_feats : int
         Number of input features per node.
-    n_out_feats: int
+    n_hidden : int
+        Dimension of the hidden layers.
+    n_out_feats : int
+        Dimension of the output features.
+    n_layers : int
+        Number of GNN layers.
+    act_fn : nn.Module
+        Activation function used in each layer.
+    temp : float
+        Temperature parameter for contrastive loss, controls the sharpness of
+        the similarity distribution.
+    edges_removing_rate_1 : float
+        Proportion of edges to remove when generating the first view of the graph.
+    edges_removing_rate_2 : float
+        Proportion of edges to remove when generating the second view of the graph.
+    feats_masking_rate_1 : float
+        Proportion of node features to mask when generating the first view of the graph.
+    feats_masking_rate_2 : float
+        Proportion of node features to mask when generating the second view of the graph.
+    """
+
+    def __init__(
+            self,
+            n_in_feats,
+            n_hidden,
+            n_out_feats,
+            n_layers,
+            act_fn,
+            temp,
+            edges_removing_rate_1,
+            edges_removing_rate_2,
+            feats_masking_rate_1,
+            feats_masking_rate_2
+    ):
+        super(GRACE, self).__init__()
+        self.encoder = GCN(n_in_feats, n_hidden, act_fn, n_layers)  # Initialize the GCN encoder
+        # Initialize the MLP projector to map the encoded features to the contrastive space
+        self.proj = MLP(n_hidden, n_out_feats)
+        self.temp = temp  # Set the temperature for the contrastive loss
+        self.edges_removing_rate_1 = edges_removing_rate_1  # Edge removal rate for the first view
+        self.edges_removing_rate_2 = edges_removing_rate_2  # Edge removal rate for the second view
+        self.feats_masking_rate_1 = feats_masking_rate_1  # Feature masking rate for the first view
+        self.feats_masking_rate_2 = feats_masking_rate_2  # Feature masking rate for the second view
+
+    @staticmethod
+    def sim(z1, z2):
+        """
+        Compute the cosine similarity between two sets of node embeddings.
+
+        Parameters
+        ----------
+        z1 : torch.Tensor
+            Node embeddings from the first view.
+        z2 : torch.Tensor
+            Node embeddings from the second view.
+
+        Returns
+        -------
+        torch.Tensor
+            Cosine similarity matrix.
+        """
+        z1 = F.normalize(z1)  # Normalize the embeddings for the first view
+        z2 = F.normalize(z2)  # Normalize the embeddings for the second view
+        return torch.mm(z1, z2.t())  # Compute pairwise cosine similarity
+
+    def sim_loss(self, z1, z2):
+        """
+        Compute the contrastive loss based on cosine similarity.
+
+        Parameters
+        ----------
+        z1 : torch.Tensor
+            Node embeddings from the first view.
+        z2 : torch.Tensor
+            Node embeddings from the second view.
+
+        Returns
+        -------
+        torch.Tensor
+            Contrastive loss for the input embeddings.
+        """
+        f = lambda x: torch.exp(x / self.temp)  # Apply temperature scaling
+        refl_sim = f(self.sim(z1, z1))  # Self-similarity within the first view
+        between_sim = f(self.sim(z1, z2))  # Cross-similarity between the two views
+        x1 = refl_sim.sum(1) + between_sim.sum(1) - refl_sim.diag()  # Summation of similarities
+        loss = -torch.log(between_sim.diag() / x1)  # Compute the contrastive loss
+        return loss
+
+    def loss(self, z1, z2):
+        """
+        Compute the symmetric contrastive loss for both views.
+
+        Parameters
+        ----------
+        z1 : torch.Tensor
+            Node embeddings from the first view.
+        z2 : torch.Tensor
+            Node embeddings from the second view.
+
+        Returns
+        -------
+        torch.Tensor
+            Average symmetric contrastive loss.
+        """
+        l1 = self.sim_loss(z1, z2)  # Loss for the first view
+        l2 = self.sim_loss(z2, z1)  # Loss for the second view (symmetry)
+        return (l1 + l2).mean() * 0.5  # Average the loss for symmetry
+
+    def get_embedding(self, graph, feats):
+        """
+        Get the node embeddings from the encoder without computing gradients.
+
+        Parameters
+        ----------
+        graph : dgl.DGLGraph
+            The input graph.
+        feats : torch.Tensor
+            Node features.
+
+        Returns
+        -------
+        torch.Tensor
+            Node embeddings.
+        """
+        h = self.encoder(graph, feats)  # Encode the node features with GCN
+        return h.detach()  # Detach from computation graph for evaluation
+
+    def forward(self, graph, feats):
+        """
+        Perform the forward pass and compute the contrastive loss.
+
+        Parameters
+        ----------
+        graph : dgl.DGLGraph
+            The input graph.
+        feats : torch.Tensor
+            Node features.
+
+        Returns
+        -------
+        torch.Tensor
+            Contrastive loss between two views of the graph.
+        """
+        # Generate the first view
+        graph1, feats1 = _generating_views(graph, feats, self.edges_removing_rate_1, self.feats_masking_rate_1)
+        # Generate the second view
+        graph2, feats2 = _generating_views(graph, feats, self.edges_removing_rate_2, self.feats_masking_rate_2)
+        z1 = self.proj(self.encoder(graph1, feats1))  # Project the encoded features for the first view
+        z2 = self.proj(self.encoder(graph2, feats2))  # Project the encoded features for the second view
+        loss = self.loss(z1, z2)  # Compute the contrastive loss
+        return loss
+
+
+class GCN(nn.Module):
+    """
+    Graph Convolutional Network (GCN) for node feature transformation.
+
+    Parameters
+    ----------
+    n_in_feats : int
+        Number of input features per node.
+    n_out_feats : int
         Number of output features per node.
-    act_fn: nn.Module
-        Activation function to use after each convolution.
-    n_layers: int
-        Number of layers in the GCN, at least 2.
+    act_fn : nn.Module
+        Activation function.
+    n_layers : int
+        Number of GCN layers.
     """
 
     def __init__(self, n_in_feats, n_out_feats, act_fn, n_layers=2):
         super(GCN, self).__init__()
         assert n_layers >= 2, "Number of layers should be at least 2."
-
-        self.n_layers = n_layers
-        self.n_hidden = n_out_feats * 2  # Set hidden dimension as twice the output dimension.
-        self.input_layer = GraphConv(n_in_feats, self.n_hidden, activation=act_fn)
-        self.hidden_layers = nn.ModuleList()
-        for _ in range(n_layers - 2):
-            self.hidden_layers.append(GraphConv(self.n_hidden, self.n_hidden, activation=act_fn))
-        self.output_layer = GraphConv(self.n_hidden, n_out_feats, activation=act_fn)
+        self.n_layers = n_layers  # Set the number of layers
+        self.n_hidden = n_out_feats * 2  # Set the hidden dimension as twice the output dimension
+        self.input_layer = GraphConv(n_in_feats, self.n_hidden, activation=act_fn)  # Define the input layer
+        self.hidden_layers = nn.ModuleList([
+            GraphConv(self.n_hidden, self.n_hidden, activation=act_fn) for _ in range(n_layers - 2)
+        ])  # Define the hidden layers
+        self.output_layer = GraphConv(self.n_hidden, n_out_feats, activation=act_fn)  # Define the output layer
 
     def forward(self, graph, feat):
-        # Apply graph convolutions
-        feat = self.input_layer(graph, feat)
+        """
+        Forward pass through the GCN.
+
+        Parameters
+        ----------
+        graph : dgl.DGLGraph
+            The input graph.
+        feat : torch.Tensor
+            Node features.
+
+        Returns
+        -------
+        torch.Tensor
+            Transformed node features after passing through the GCN layers.
+        """
+        feat = self.input_layer(graph, feat)  # Apply graph convolution at the input layer
         for hidden_layer in self.hidden_layers:
-            feat = hidden_layer(graph, feat)
-        feat = self.output_layer(graph, feat)
-        return feat
+            feat = hidden_layer(graph, feat)  # Apply graph convolution at each hidden layer
+        return self.output_layer(graph, feat)  # Apply graph convolution at the output layer
 
 
 class MLP(nn.Module):
-    r"""
+    """
     A simple Multi-Layer Perceptron (MLP) for projecting node embeddings to a new space.
 
     Parameters
-    -----------
-    n_in_feats: int
+    ----------
+    n_in_feats : int
         Number of input features.
-    n_out_feats: int
+    n_out_feats : int
         Number of output features.
     """
 
     def __init__(self, n_in_feats, n_out_feats):
         super(MLP, self).__init__()
-        self.fc1 = nn.Linear(n_in_feats, n_out_feats)  # First fully connected layer.
-        self.fc2 = nn.Linear(n_out_feats, n_in_feats)  # Second fully connected layer.
+        self.fc1 = nn.Linear(n_in_feats, n_out_feats)  # Define the first fully connected layer
+        self.fc2 = nn.Linear(n_out_feats, n_out_feats)  # Define the second fully connected layer
 
     def forward(self, x):
-        z = F.elu(self.fc1(x))  # Apply ELU activation after the first layer.
-        return self.fc2(z)  # Return the output of the second layer.
+        """
+        Forward pass through the MLP.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input node embeddings.
+
+        Returns
+        -------
+        torch.Tensor
+            Projected node embeddings.
+        """
+        z = F.elu(self.fc1(x))  # Apply ELU activation after the first layer
+        return self.fc2(z)  # Return the output of the second layer
 
 
-class Grace(nn.Module):
-    r"""
-    Implementation of the GRACE model for graph representation learning via contrastive learning.
+def _generating_views(graph, feats, edges_removing_rate, feats_masking_rate):
+    """
+    Generate two different views of the graph by removing edges and masking node features.
 
     Parameters
-    -----------
-    n_in_feats: int
-        Number of input features.
-    n_hidden: int
-        Hidden layer size.
-    n_out_feats: int
-        Output feature size.
-    n_layers: int
-        Number of GNN layers.
-    act_fn: nn.Module
-        Activation function used in the GCN.
-    temp: float
-        Temperature parameter used in contrastive loss.
+    ----------
+    graph : dgl.DGLGraph
+        The input graph.
+    feats : torch.Tensor
+        Node features.
+    edges_removing_rate : float
+        Proportion of edges to remove.
+    feats_masking_rate : float
+        Proportion of node features to mask.
+
+    Returns
+    -------
+    new_graph : dgl.DGLGraph
+        The modified graph with some edges removed.
+    masked_feats : torch.Tensor
+        Node features with some values masked.
     """
+    # Removing edges (RE)
+    removing_edges_idx = _get_removing_edges_idx(graph, edges_removing_rate)  # Get the indices of edges to remove
+    src = graph.edges()[0]  # Source nodes of the edges
+    dst = graph.edges()[1]  # Destination nodes of the edges
+    new_src = src[removing_edges_idx]  # New source nodes after edge removal
+    new_dst = dst[removing_edges_idx]  # New destination nodes after edge removal
+    new_graph = dgl.graph((new_src, new_dst), num_nodes=graph.num_nodes(), device=graph.device)  # Create a new graph with the remaining edges
+    new_graph = dgl.add_self_loop(new_graph)  # Add self-loops to the new graph
 
-    def __init__(self, n_in_feats, n_hidden, n_out_feats, n_layers, act_fn, temp):
-        super(Grace, self).__init__()
-        self.encoder = GCN(n_in_feats, n_hidden, act_fn, n_layers)  # GCN encoder.
-        self.proj = MLP(n_hidden, n_out_feats)  # MLP projector.
-        self.temp = temp  # Temperature for scaling contrastive loss.
+    # Masking node features (MF)
+    masked_feats = _masking_node_feats(feats, feats_masking_rate)  # Mask node features
 
-    @staticmethod
-    def sim(z1, z2):
-        z1 = F.normalize(z1)  # Normalize the features.
-        z2 = F.normalize(z2)
-        s = th.mm(z1, z2.t())  # Compute cosine similarity.
-        return s
+    return new_graph, masked_feats  # Return the modified graph and masked features
 
-    def get_loss(self, z1, z2):
-        f = lambda x: th.exp(x / self.temp)  # Exponential function scaled by temperature.
 
-        refl_sim = f(self.sim(z1, z1))  # Similarity within the same view.
-        between_sim = f(self.sim(z1, z2))  # Similarity between different views.
+def _masking_node_feats(feats, masking_rate):
+    """
+    Mask node features by setting a certain proportion to zero.
 
-        x1 = refl_sim.sum(1) + between_sim.sum(1) - refl_sim.diag()  # Denominator of contrastive loss.
-        loss = -th.log(between_sim.diag() / x1)  # Numerator of contrastive loss.
+    Parameters
+    ----------
+    feats : torch.Tensor
+        Node features.
+    masking_rate : float
+        Proportion of features to mask.
 
-        return loss
+    Returns
+    -------
+    torch.Tensor
+        Node features with some values masked.
+    """
+    mask = torch.rand(feats.size(1), dtype=torch.float32, device=feats.device) < masking_rate  # Generate a random mask
+    feats = feats.clone()  # Clone the features to avoid in-place modification
+    feats[:, mask] = 0  # Set masked features to zero
+    return feats  # Return the masked features
 
-    def get_embedding(self, graph, feat):
-        h = self.encoder(graph, feat)  # Get embeddings from the GCN.
-        return h.detach()  # Detach embeddings from the graph for evaluation.
 
-    def forward(self, graph1, graph2, feat1, feat2):
-        h1 = self.encoder(graph1, feat1)  # Encode first graph features.
-        h2 = self.encoder(graph2, feat2)  # Encode second graph features.
-        z1 = self.proj(h1)  # Project first graph embeddings.
-        z2 = self.proj(h2)  # Project second graph embeddings.
-        l1 = self.get_loss(z1, z2)  # Calculate loss for the first projection.
-        l2 = self.get_loss(z2, z1)  # Calculate loss for the second projection.
-        ret = (l1 + l2) * 0.5  # Average the losses for symmetry.
-        return ret.mean()  # Return the mean of the loss.
+def _get_removing_edges_idx(graph, edges_removing_rate):
+    """
+    Generate the indices of edges to be removed from the graph.
+
+    Parameters
+    ----------
+    graph : dgl.DGLGraph
+        The input graph.
+    edges_removing_rate : float
+        Proportion of edges to remove.
+
+    Returns
+    -------
+    torch.Tensor
+        Indices of the edges to be removed.
+    """
+    E = graph.num_edges()  # Total number of edges
+    mask_rates = torch.FloatTensor(np.ones(E) * edges_removing_rate)  # Generate mask rates for each edge
+    masks = torch.bernoulli(1 - mask_rates)  # Generate a mask indicating which edges to keep
+    mask_idx = masks.nonzero().squeeze(1)  # Get the indices of edges to keep
+    return mask_idx  # Return the indices of edges to be removed
