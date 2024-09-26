@@ -24,7 +24,7 @@ def diffpool_test(
         num_pool=1,
         linkpred=False,
         n_epochs=1000,
-        early_stopping=200,
+        early_stopping=300,
         clip=2.0,
         gpu=0
 ):
@@ -55,18 +55,15 @@ def diffpool_test(
     print("model embedding dim for graph instance embedding", n_embedding)
     print("initial batched pool graph dim is", n_assign)
 
-    activation = F.relu
     model = DiffPool(
         n_feat_in,
         n_hidden,
         n_embedding,
         n_labels,
-        activation,
         gc_per_block,
         dropout,
         num_pool,
         linkpred,
-        batch_size,
         "mean",
         n_assign,
         pool_ratio,
@@ -141,7 +138,7 @@ def evaluate(dataloader, model, device):
     return acc
 
 
-def set_random_seed(seed=0):
+def set_random_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)

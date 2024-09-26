@@ -31,7 +31,10 @@ def han_test(
         val_mask,
         test_mask,
     ) = dataset_from_dgl_download(dataset_name)
-
+    for g in graphs:
+        print(g)
+    print(feats.shape)
+    print(labels.shape)
     device = "cuda:{}".format(gpu) if gpu != -1 and torch.cuda.is_available() else "cpu"
 
     feats = feats.to(device)
