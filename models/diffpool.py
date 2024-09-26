@@ -23,22 +23,19 @@ class DiffPool(nn.Module):
         n_hidden,
         n_embedding,
         n_out,
-        activation,
         n_layers,
         dropout,
         n_pooling,
         linkpred,
-        batch_size,
         aggregator_type,
         n_assign,
         pool_ratio,
-        cat=False,
+        concat=False,
     ):
         super(DiffPool, self).__init__()
         self.link_pred = linkpred
-        self.concat = cat
+        self.concat = concat
         self.n_pooling = n_pooling
-        self.batch_size = batch_size
         self.link_pred_loss = []
         self.entropy_loss = []
 
@@ -49,26 +46,19 @@ class DiffPool(nn.Module):
         # list of GNN modules, each list after one diffpool operation
         self.gc_after_pool = nn.ModuleList()
         self.assign_dim = n_assign
-        self.bn = True
         self.num_aggs = 1
 
         # constructing layers before diffpool
         assert n_layers >= 3, "n_layers too few"
         self.gc_before_pool.append(
-            SAGEConv(n_input_feat, n_hidden, aggregator_type, feat_drop=dropout, activation=activation, bias=self.bn)
+            SAGEConv(n_input_feat, n_hidden, aggregator_type, feat_drop=dropout, activation=F.relu)
         )
         for _ in range(n_layers - 2):
             self.gc_before_pool.append(
-                SAGEConv(n_hidden, n_hidden, aggregator_type, feat_drop=dropout, activation=activation, bias=self.bn)
+                SAGEConv(n_hidden, n_hidden, aggregator_type, feat_drop=dropout, activation=F.relu)
             )
         self.gc_before_pool.append(
-            SAGEConv(
-                n_hidden,
-                n_embedding,
-                aggregator_type,
-                feat_drop=dropout,
-                activation=None,
-            )
+            SAGEConv(n_hidden, n_embedding, aggregator_type, feat_drop=dropout, activation=None)
         )
 
         assign_dims = [self.assign_dim]
@@ -83,7 +73,6 @@ class DiffPool(nn.Module):
             pool_embedding_dim,
             self.assign_dim,
             n_hidden,
-            activation,
             dropout,
             aggregator_type,
             self.link_pred,
@@ -99,12 +88,7 @@ class DiffPool(nn.Module):
         # each pooling module
         for _ in range(n_pooling - 1):
             self.diffpool_layers.append(
-                _BatchedDiffPool(
-                    pool_embedding_dim,
-                    self.assign_dim,
-                    n_hidden,
-                    self.link_pred,
-                )
+                _BatchedDiffPool(pool_embedding_dim, self.assign_dim, n_hidden, self.link_pred)
             )
             gc_after_per_pool = nn.ModuleList()
             for _ in range(n_layers - 1):
@@ -175,9 +159,6 @@ class DiffPool(nn.Module):
         return ypred
 
     def loss(self, pred, label):
-        """
-        loss function
-        """
         # softmax + CE
         criterion = nn.CrossEntropyLoss()
         loss = criterion(pred, label)
@@ -190,20 +171,18 @@ class DiffPool(nn.Module):
 
 
 class _BatchedGraphSAGE(nn.Module):
-    def __init__(self, infeat, outfeat, use_bn=True, mean=False, add_self=False):
+    def __init__(self, n_feat_in, n_feat_out, mean=False, add_self=False):
         super().__init__()
         self.bn = None
         self.add_self = add_self
-        self.use_bn = use_bn
         self.mean = mean
-        self.w = nn.Linear(infeat, outfeat, bias=True)
+        self.w = nn.Linear(n_feat_in, n_feat_out, bias=True)
 
         nn.init.xavier_uniform_(self.w.weight, gain=nn.init.calculate_gain("relu"))
 
     def forward(self, x, adj):
         num_node_per_graph = adj.size(1)
-        if self.use_bn:
-            self.bn = nn.BatchNorm1d(num_node_per_graph).to(adj.device)
+        self.bn = nn.BatchNorm1d(num_node_per_graph).to(adj.device)
 
         if self.add_self:
             adj = adj + torch.eye(num_node_per_graph).to(adj.device)
@@ -219,31 +198,25 @@ class _BatchedGraphSAGE(nn.Module):
             h_k = self.bn(h_k)
         return h_k
 
-    def __repr__(self):
-        if self.use_bn:
-            return "BN" + super(_BatchedGraphSAGE, self).__repr__()
-        return super(_BatchedGraphSAGE, self).__repr__()
-
 
 class _DiffPoolAssignment(nn.Module):
-    def __init__(self, nfeat, nnext):
+    def __init__(self, n_feat, n_next):
         super().__init__()
-        self.assign_mat = _BatchedGraphSAGE(nfeat, nnext, use_bn=True)
+        self.assign_mat = _BatchedGraphSAGE(n_feat, n_next)
 
-    def forward(self, x, adj, log=False):
+    def forward(self, x, adj):
         s_l_init = self.assign_mat(x, adj)
         s_l = F.softmax(s_l_init, dim=-1)
         return s_l
 
 
 class _BatchedDiffPool(nn.Module):
-    def __init__(self, nfeat, nnext, nhid, link_pred=False, entropy=True):
+    def __init__(self, n_feat, n_next, n_hid, link_pred=False, entropy=True):
         super(_BatchedDiffPool, self).__init__()
         self.link_pred = link_pred
-        self.log = {}
         self.link_pred_layer = _LinkPredLoss()
-        self.embed = _BatchedGraphSAGE(nfeat, nhid, use_bn=True)
-        self.assign = _DiffPoolAssignment(nfeat, nnext)
+        self.embed = _BatchedGraphSAGE(n_feat, n_hid)
+        self.assign = _DiffPoolAssignment(n_feat, n_next)
         self.reg_loss = nn.ModuleList([])
         self.loss_log = {}
         if link_pred:
@@ -251,20 +224,16 @@ class _BatchedDiffPool(nn.Module):
         if entropy:
             self.reg_loss.append(_EntropyLoss())
 
-    def forward(self, x, adj, log=False):
+    def forward(self, x, adj):
         z_l = self.embed(x, adj)
         s_l = self.assign(x, adj)
-        if log:
-            self.log["s"] = s_l.cpu().numpy()
-        xnext = torch.matmul(s_l.transpose(-1, -2), z_l)
-        anext = (s_l.transpose(-1, -2)).matmul(adj).matmul(s_l)
+        x_next = torch.matmul(s_l.transpose(-1, -2), z_l)
+        a_next = (s_l.transpose(-1, -2)).matmul(adj).matmul(s_l)
 
         for loss_layer in self.reg_loss:
             loss_name = str(type(loss_layer).__name__)
-            self.loss_log[loss_name] = loss_layer(adj, anext, s_l)
-        if log:
-            self.log["a"] = anext.cpu().numpy()
-        return xnext, anext
+            self.loss_log[loss_name] = loss_layer(adj, a_next, s_l)
+        return x_next, a_next
 
 
 class _DiffPoolBatchedGraphLayer(nn.Module):
@@ -273,7 +242,6 @@ class _DiffPoolBatchedGraphLayer(nn.Module):
         input_dim,
         assign_dim,
         output_feat_dim,
-        activation,
         dropout,
         aggregator_type,
         link_pred,
@@ -288,14 +256,14 @@ class _DiffPoolBatchedGraphLayer(nn.Module):
             output_feat_dim,
             aggregator_type,
             feat_drop=dropout,
-            activation=activation,
+            activation=F.relu,
         )
         self.pool_gc = SAGEConv(
             input_dim,
             assign_dim,
             aggregator_type,
             feat_drop=dropout,
-            activation=activation,
+            activation=F.relu,
         )
         self.reg_loss = nn.ModuleList([])
         self.loss_log = {}
@@ -312,11 +280,10 @@ class _DiffPoolBatchedGraphLayer(nn.Module):
         h = torch.matmul(torch.t(assign_tensor), feat)
         adj = g.adj_external(transpose=True, ctx=device)
         adj_dense = adj.to_dense()
-        adj_new = torch.mm(adj_dense, assign_tensor)
-        adj_new = torch.mm(torch.t(assign_tensor), adj_new)
+        adj_new = torch.mm(torch.t(assign_tensor), torch.mm(adj_dense, assign_tensor))
 
         if self.link_pred:
-            current_lp_loss = torch.norm(adj.to_dense() - torch.mm(assign_tensor, torch.t(assign_tensor))) / np.power(
+            current_lp_loss = torch.norm(adj_dense - torch.mm(assign_tensor, torch.t(assign_tensor))) / np.power(
                 g.num_nodes(), 2
             )
             self.loss_log["LinkPredLoss"] = current_lp_loss
@@ -330,14 +297,14 @@ class _DiffPoolBatchedGraphLayer(nn.Module):
 
 class _EntropyLoss(nn.Module):
     # Return Scalar
-    def forward(self, adj, anext, s_l):
+    def forward(self, adj, a_next, s_l):
         entropy = (torch.distributions.Categorical(probs=s_l).entropy()).sum(-1).mean(-1)
         assert not torch.isnan(entropy)
         return entropy
 
 
 class _LinkPredLoss(nn.Module):
-    def forward(self, adj, anext, s_l):
+    def forward(self, adj, a_next, s_l):
         link_pred_loss = (adj - s_l.matmul(s_l.transpose(-1, -2))).norm(dim=(1, 2))
         link_pred_loss = link_pred_loss / (adj.size(1) * adj.size(2))
         return link_pred_loss.mean()
@@ -365,8 +332,7 @@ def _batch2tensor(batch_adj, batch_feat, node_per_pool_graph):
 
 def _masked_softmax(matrix, mask, dim=-1, memory_efficient=True, mask_fill_value=-1e32):
     """
-    masked_softmax for dgl batch graph
-    code snippet contributed by AllenNLP (https://github.com/allenai/allennlp)
+    Code snippet contributed by AllenNLP (https://github.com/allenai/allennlp)
     """
     if mask is None:
         result = torch.nn.functional.softmax(matrix, dim=dim)
@@ -385,9 +351,6 @@ def _masked_softmax(matrix, mask, dim=-1, memory_efficient=True, mask_fill_value
 
 
 def _gcn_forward(g, h, gc_layers, cat=False):
-    """
-    Return gc_layer embedding cat.
-    """
     block_readout = []
     for gc_layer in gc_layers[:-1]:
         h = gc_layer(g, h)
